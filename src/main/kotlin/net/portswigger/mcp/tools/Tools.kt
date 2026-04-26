@@ -243,6 +243,20 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
             api.scanner().startActiveScan(targetHostname, targetPort, usesHttps, listOf(baselineResponse))
             "Active scan started against $targetHostname:$targetPort. Use get_scanner_issues to poll for results."
         }
+
+        mcpTool<StartPassiveScan>(
+            "Runs passive vulnerability checks on the given HTTP request without sending additional requests. " +
+            "Sends the request once to obtain a response, then runs Burp passive scan checks on the pair. " +
+            "Passive checks detect issues like missing security headers, information disclosure, and insecure cookies. " +
+            "Use get_scanner_issues to view results. Pro only."
+        ) {
+            api.logging().logToOutput("MCP starting passive scan: $targetHostname:$targetPort")
+            val fixedContent = content.replace("\r", "").replace("\n", "\r\n")
+            val request = HttpRequest.httpRequest(toMontoyaService(), fixedContent)
+            val requestResponse = api.http().sendRequest(request)
+            api.scanner().startPassiveScan(requestResponse)
+            "Passive scan started against $targetHostname:$targetPort. Use get_scanner_issues to view results."
+        }
     }
 
     mcpPaginatedTool<GetProxyHttpHistory>("Displays items within the proxy HTTP history") {
@@ -527,3 +541,11 @@ data class GetSiteMapForUrl(
     override val count: Int,
     override val offset: Int
 ) : Paginated
+
+@Serializable
+data class StartPassiveScan(
+    val content: String,
+    override val targetHostname: String,
+    override val targetPort: Int,
+    override val usesHttps: Boolean
+) : HttpServiceParams
