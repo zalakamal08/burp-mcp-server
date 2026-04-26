@@ -10,7 +10,7 @@ import burp.api.montoya.http.HttpService
 import burp.api.montoya.http.message.HttpHeader
 import burp.api.montoya.http.message.HttpRequestResponse
 import burp.api.montoya.http.message.requests.HttpRequest
-import burp.api.montoya.scanner.AuditConfiguration
+import burp.api.montoya.scanner.CrawlConfiguration
 import burp.api.montoya.sitemap.SiteMapFilter
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import kotlinx.coroutines.runBlocking
@@ -238,13 +238,12 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
             "Sends the request first to capture a baseline response, then passes it to the scanner. " +
             "Use get_scanner_issues to poll for discovered vulnerabilities. Pro only."
         ) {
-            api.logging().logToOutput("MCP starting active scan: $targetHostname:$targetPort")
-            val fixedContent = content.replace("\r", "").replace("\n", "\r\n")
-            val request = HttpRequest.httpRequest(toMontoyaService(), fixedContent)
-            val baselineResponse = api.http().sendRequest(request)
-            val auditConfig = AuditConfiguration.auditConfiguration(listOf(baselineResponse))
-            api.scanner().startAudit(auditConfig)
-            "Active scan started against $targetHostname:$targetPort. Use get_scanner_issues to poll for results."
+            api.logging().logToOutput("MCP starting active scan (crawl): $targetHostname:$targetPort")
+            val scheme = if (usesHttps) "https" else "http"
+            val portSuffix = if ((usesHttps && targetPort == 443) || (!usesHttps && targetPort == 80)) "" else ":$targetPort"
+            val targetUrl = "$scheme://$targetHostname$portSuffix/"
+            api.scanner().startCrawl(CrawlConfiguration.crawlConfiguration(targetUrl))
+            "Active crawl+audit started for $targetUrl. Use get_scanner_issues to poll for results."
         }
 
         mcpTool<StartPassiveScan>(
@@ -253,13 +252,13 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
             "Passive checks detect issues like missing security headers, information disclosure, and insecure cookies. " +
             "Use get_scanner_issues to view results. Pro only."
         ) {
-            api.logging().logToOutput("MCP starting passive scan: $targetHostname:$targetPort")
+            api.logging().logToOutput("MCP adding to sitemap for passive analysis: $targetHostname:$targetPort")
             val fixedContent = content.replace("\r", "").replace("\n", "\r\n")
             val request = HttpRequest.httpRequest(toMontoyaService(), fixedContent)
             val requestResponse = api.http().sendRequest(request)
-            val passiveConfig = AuditConfiguration.auditConfiguration(listOf(requestResponse))
-            api.scanner().startAudit(passiveConfig)
-            "Passive scan started against $targetHostname:$targetPort. Use get_scanner_issues to view results."
+            api.siteMap().add(requestResponse)
+            "Request added to sitemap for $targetHostname:$targetPort. " +
+            "Burp's passive scanner will automatically analyse it. Use get_scanner_issues to view results."
         }
     }
 
