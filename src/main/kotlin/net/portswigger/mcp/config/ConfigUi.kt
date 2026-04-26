@@ -22,6 +22,11 @@ class ConfigUi(private val config: McpConfig, private val providers: List<Provid
 
     private val listenerHandles = mutableListOf<ListenerHandle>()
 
+    private val hostField = JTextField(15)
+    private val portField = JTextField(5)
+    private val reinstallNotice = WarningLabel("Make sure to reinstall after changing server settings")
+    private val validationErrorLabel = WarningLabel()
+
     private val enabledToggle: ToggleSwitch = Design.createToggleSwitch(false) { enabled ->
         if (suppressToggleEvents) return@createToggleSwitch
 
@@ -40,14 +45,8 @@ class ConfigUi(private val config: McpConfig, private val providers: List<Provid
         config.enabled = enabled
         toggleListener?.invoke(enabled)
     }
-    private val validationErrorLabel = WarningLabel()
-    private val hostField = JTextField(15)
-    private val portField = JTextField(5)
-    private val reinstallNotice = WarningLabel("Make sure to reinstall after changing server settings")
 
     private lateinit var serverConfigurationPanel: ServerConfigurationPanel
-    private lateinit var advancedOptionsPanel: AdvancedOptionsPanel
-    private lateinit var autoApproveTargetsPanel: AutoApproveTargetsPanel
     private lateinit var installationPanel: InstallationPanel
 
     private var toggleListener: ((Boolean) -> Unit)? = null
@@ -64,39 +63,24 @@ class ConfigUi(private val config: McpConfig, private val providers: List<Provid
 
     private fun initializeComponents() {
         serverConfigurationPanel = ServerConfigurationPanel(
-            config = config, enabledToggle = enabledToggle, validationErrorLabel = validationErrorLabel
+            config = config,
+            enabledToggle = enabledToggle,
+            validationErrorLabel = validationErrorLabel,
+            hostField = hostField,
+            portField = portField
         )
-
-        advancedOptionsPanel = AdvancedOptionsPanel(
-            hostField = hostField, portField = portField, reinstallNotice = reinstallNotice
-        )
-
-        autoApproveTargetsPanel = AutoApproveTargetsPanel(config = config)
 
         installationPanel = InstallationPanel(
-            config = config, providers = providers, reinstallNotice = reinstallNotice, parentComponent = panel
+            config = config,
+            providers = providers,
+            reinstallNotice = reinstallNotice,
+            parentComponent = panel
         )
-
-        setupConfigListeners()
-    }
-
-    private fun setupConfigListeners() {
-        val historyAccessRefreshListener = {
-            SwingUtilities.invokeLater {
-                serverConfigurationPanel.updateHistoryAccessCheckboxes()
-            }
-        }
-        val handle = config.addHistoryAccessChangeListener(historyAccessRefreshListener)
-        listenerHandles.add(handle)
     }
 
     fun cleanup() {
         listenerHandles.forEach { it.remove() }
         listenerHandles.clear()
-
-        if (::autoApproveTargetsPanel.isInitialized) {
-            autoApproveTargetsPanel.cleanup()
-        }
     }
 
     fun onEnabledToggled(listener: (Boolean) -> Unit) {
@@ -113,10 +97,9 @@ class ConfigUi(private val config: McpConfig, private val providers: List<Provid
         CoroutineScope(Dispatchers.Swing).launch {
             suppressToggleEvents = true
 
-            val enableAdvancedOptions = state is ServerState.Stopped || state is ServerState.Failed
-            if (::advancedOptionsPanel.isInitialized) {
-                advancedOptionsPanel.setFieldsEnabled(enableAdvancedOptions)
-            }
+            // Host/port are only editable when the server is NOT running
+            val fieldsEditable = state is ServerState.Stopped || state is ServerState.Failed
+            serverConfigurationPanel.setConnectionFieldsEnabled(fieldsEditable)
 
             when (state) {
                 ServerState.Starting, ServerState.Stopping -> {
@@ -195,16 +178,9 @@ class ConfigUi(private val config: McpConfig, private val providers: List<Provid
         }
 
         rightPanelContent.add(serverConfigurationPanel)
-        rightPanelContent.add(createVerticalStrut(Design.Spacing.LG))
-
-        rightPanelContent.add(autoApproveTargetsPanel)
-
-        rightPanelContent.add(createVerticalStrut(15))
-        rightPanelContent.add(advancedOptionsPanel)
         rightPanelContent.add(createVerticalGlue())
         rightPanelContent.add(reinstallNotice)
         rightPanelContent.add(createVerticalStrut(10))
-
         rightPanelContent.add(installationPanel)
 
         val columnsPanel = ResponsiveColumnsPanel(leftPanel, rightPanel)

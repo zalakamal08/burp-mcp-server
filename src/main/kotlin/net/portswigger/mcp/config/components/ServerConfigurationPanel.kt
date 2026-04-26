@@ -4,7 +4,6 @@ import net.portswigger.mcp.config.Design
 import net.portswigger.mcp.config.McpConfig
 import net.portswigger.mcp.config.ToggleSwitch
 import java.awt.FlowLayout
-import java.awt.event.ItemEvent
 import javax.swing.*
 import javax.swing.Box.createHorizontalStrut
 import javax.swing.Box.createVerticalStrut
@@ -12,11 +11,10 @@ import javax.swing.Box.createVerticalStrut
 class ServerConfigurationPanel(
     private val config: McpConfig,
     private val enabledToggle: ToggleSwitch,
-    private val validationErrorLabel: WarningLabel
+    private val validationErrorLabel: WarningLabel,
+    private val hostField: JTextField,
+    private val portField: JTextField
 ) : JPanel() {
-
-    private lateinit var alwaysAllowHttpHistoryCheckBox: JCheckBox
-    private lateinit var alwaysAllowWebSocketHistoryCheckBox: JCheckBox
 
     init {
         layout = BoxLayout(this, BoxLayout.Y_AXIS)
@@ -43,45 +41,7 @@ class ServerConfigurationPanel(
         add(Design.createSectionLabel("Server Configuration"))
         add(createVerticalStrut(Design.Spacing.MD))
 
-        val enabledPanel = createEnabledPanel()
-        add(enabledPanel)
-        add(createVerticalStrut(Design.Spacing.MD))
-
-        val configEditingToolingCheckBox = createCheckBoxWithSubtitle(
-            "Enable tools that can edit your config",
-            "WARNING: Can execute code",
-            config.configEditingTooling
-        ) { config.configEditingTooling = it }
-        add(configEditingToolingCheckBox)
-        add(createVerticalStrut(Design.Spacing.MD))
-
-        val httpRequestApprovalCheckBox = createStandardCheckBox(
-            "Require approval for HTTP requests", config.requireHttpRequestApproval
-        ) { config.requireHttpRequestApproval = it }
-        add(httpRequestApprovalCheckBox)
-        add(createVerticalStrut(Design.Spacing.MD))
-
-        val historyAccessApprovalCheckBox = createHistoryAccessApprovalCheckBox()
-        add(historyAccessApprovalCheckBox)
-        add(createVerticalStrut(Design.Spacing.SM))
-
-        alwaysAllowHttpHistoryCheckBox = createIndentedCheckBox(
-            "Always allow HTTP history access", config.alwaysAllowHttpHistory, config.requireHistoryAccessApproval
-        ) { config.alwaysAllowHttpHistory = it }
-        add(alwaysAllowHttpHistoryCheckBox)
-        add(createVerticalStrut(Design.Spacing.SM))
-
-        alwaysAllowWebSocketHistoryCheckBox = createIndentedCheckBox(
-            "Always allow WebSocket history access",
-            config.alwaysAllowWebSocketHistory,
-            config.requireHistoryAccessApproval
-        ) { config.alwaysAllowWebSocketHistory = it }
-        add(alwaysAllowWebSocketHistoryCheckBox)
-
-        add(validationErrorLabel)
-    }
-
-    private fun createEnabledPanel(): JPanel {
+        // Enable / Disable toggle
         val enabledPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 4)).apply {
             isOpaque = false
             alignmentX = LEFT_ALIGNMENT
@@ -92,94 +52,55 @@ class ServerConfigurationPanel(
         })
         enabledPanel.add(createHorizontalStrut(Design.Spacing.MD))
         enabledPanel.add(enabledToggle)
-        return enabledPanel
+        add(enabledPanel)
+        add(createVerticalStrut(Design.Spacing.LG))
+
+        // Host / Port fields (always visible; editable only when server is stopped)
+        val formPanel = createFormPanel(
+            "Server host:" to hostField,
+            "Server port:" to portField
+        )
+        add(formPanel)
+        add(createVerticalStrut(Design.Spacing.MD))
+
+        add(validationErrorLabel)
     }
 
-    private fun createHistoryAccessApprovalCheckBox(): JCheckBox {
-        return createStandardCheckBox(
-            "Require approval for history access", config.requireHistoryAccessApproval
-        ) { enabled ->
-            config.requireHistoryAccessApproval = enabled
-            if (!enabled) {
-                config.alwaysAllowHttpHistory = false
-                config.alwaysAllowWebSocketHistory = false
-                alwaysAllowHttpHistoryCheckBox.isSelected = false
-                alwaysAllowWebSocketHistoryCheckBox.isSelected = false
-            }
-            alwaysAllowHttpHistoryCheckBox.isEnabled = enabled
-            alwaysAllowWebSocketHistoryCheckBox.isEnabled = enabled
-        }
+    /** Lock or unlock the host/port fields based on whether the server is running. */
+    fun setConnectionFieldsEnabled(enabled: Boolean) {
+        hostField.isEnabled = enabled
+        portField.isEnabled = enabled
     }
 
-    fun updateHistoryAccessCheckboxes() {
-        SwingUtilities.invokeLater {
-            alwaysAllowHttpHistoryCheckBox.isSelected = config.alwaysAllowHttpHistory
-            alwaysAllowWebSocketHistoryCheckBox.isSelected = config.alwaysAllowWebSocketHistory
-        }
-    }
-
-    private fun createStandardCheckBox(
-        text: String, initialValue: Boolean, onChange: (Boolean) -> Unit
-    ): JCheckBox {
-        return JCheckBox(text).apply {
-            alignmentX = LEFT_ALIGNMENT
-            isSelected = initialValue
-            font = Design.Typography.bodyLarge
-            foreground = Design.Colors.onSurface
-            addItemListener { event ->
-                onChange(event.stateChange == ItemEvent.SELECTED)
-            }
-        }
-    }
-
-    private fun createIndentedCheckBox(
-        text: String, initialValue: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit
-    ): JCheckBox {
-        return JCheckBox(text).apply {
-            alignmentX = LEFT_ALIGNMENT
-            isSelected = initialValue
-            isEnabled = enabled
-            font = Design.Typography.bodyMedium
-            foreground = Design.Colors.onSurfaceVariant
-            border = BorderFactory.createEmptyBorder(0, Design.Spacing.LG, 0, 0)
-            addItemListener { event ->
-                onChange(event.stateChange == ItemEvent.SELECTED)
-            }
-        }
-    }
-
-    private fun createCheckBoxWithSubtitle(
-        mainText: String, subtitleText: String, initialValue: Boolean, onChange: (Boolean) -> Unit
-    ): JPanel {
-        val checkBox = JCheckBox(mainText).apply {
-            alignmentX = LEFT_ALIGNMENT
-            isSelected = initialValue
-            font = Design.Typography.bodyLarge
-            foreground = Design.Colors.onSurface
-            addItemListener { event ->
-                onChange(event.stateChange == ItemEvent.SELECTED)
-            }
-        }
-
-        val subtitleLabel = JLabel(subtitleText).apply {
-            font = Design.Typography.labelMedium
-            foreground = Design.Colors.onSurfaceVariant
-        }
-
-        val subtitlePanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
-            isOpaque = false
-            alignmentX = LEFT_ALIGNMENT
-            add(createHorizontalStrut(20))
-            add(subtitleLabel)
-        }
-
-        return JPanel().apply {
+    private fun createFormPanel(vararg fields: Pair<String, JComponent>): JPanel {
+        val formPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            alignmentX = LEFT_ALIGNMENT
             isOpaque = false
-            add(checkBox)
-            add(subtitlePanel)
+            alignmentX = LEFT_ALIGNMENT
         }
+
+        for ((labelText, field) in fields) {
+            val row = JPanel(FlowLayout(FlowLayout.LEFT, 0, Design.Spacing.SM)).apply {
+                isOpaque = false
+                alignmentX = LEFT_ALIGNMENT
+            }
+            row.add(JLabel(labelText).apply {
+                font = Design.Typography.bodyLarge
+                foreground = Design.Colors.onSurface
+                preferredSize = java.awt.Dimension(100, 28)
+            })
+            row.add(createHorizontalStrut(Design.Spacing.MD))
+            if (field is JTextField) {
+                field.preferredSize = java.awt.Dimension(200, 28)
+                field.font = Design.Typography.bodyLarge
+            }
+            row.add(field)
+            formPanel.add(row)
+        }
+
+        return formPanel
     }
 
+    // Kept for listener compatibility in ConfigUi — now a no-op since checkboxes are removed.
+    fun updateHistoryAccessCheckboxes() = Unit
 }
