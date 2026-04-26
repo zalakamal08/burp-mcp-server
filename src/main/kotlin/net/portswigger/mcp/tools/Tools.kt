@@ -10,6 +10,8 @@ import burp.api.montoya.http.HttpService
 import burp.api.montoya.http.message.HttpHeader
 import burp.api.montoya.http.message.HttpRequestResponse
 import burp.api.montoya.http.message.requests.HttpRequest
+import burp.api.montoya.scanner.AuditConfiguration
+import burp.api.montoya.sitemap.SiteMapFilter
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
@@ -240,7 +242,8 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
             val fixedContent = content.replace("\r", "").replace("\n", "\r\n")
             val request = HttpRequest.httpRequest(toMontoyaService(), fixedContent)
             val baselineResponse = api.http().sendRequest(request)
-            api.scanner().startActiveScan(targetHostname, targetPort, usesHttps, listOf(baselineResponse))
+            val auditConfig = AuditConfiguration.auditConfiguration(listOf(baselineResponse))
+            api.scanner().startAudit(auditConfig)
             "Active scan started against $targetHostname:$targetPort. Use get_scanner_issues to poll for results."
         }
 
@@ -254,7 +257,8 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
             val fixedContent = content.replace("\r", "").replace("\n", "\r\n")
             val request = HttpRequest.httpRequest(toMontoyaService(), fixedContent)
             val requestResponse = api.http().sendRequest(request)
-            api.scanner().startPassiveScan(requestResponse)
+            val passiveConfig = AuditConfiguration.auditConfiguration(listOf(requestResponse))
+            api.scanner().startAudit(passiveConfig)
             "Passive scan started against $targetHostname:$targetPort. Use get_scanner_issues to view results."
         }
     }
@@ -360,7 +364,7 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
         "Returns paginated sitemap entries whose URL starts with the given prefix. " +
         "Useful for drilling into a specific host or path."
     ) {
-        api.siteMap().requestResponsesForUrl(url).asSequence()
+        api.siteMap().requestResponses(SiteMapFilter.prefixFilter(url)).asSequence()
             .map { truncateIfNeeded(Json.encodeToString(it.toSerializableForm())) }
     }
 
