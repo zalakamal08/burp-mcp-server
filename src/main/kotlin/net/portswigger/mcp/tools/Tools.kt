@@ -8,6 +8,7 @@ import burp.api.montoya.core.BurpSuiteEdition
 import burp.api.montoya.http.HttpMode
 import burp.api.montoya.http.HttpService
 import burp.api.montoya.http.message.HttpHeader
+import burp.api.montoya.http.message.HttpRequestResponse
 import burp.api.montoya.http.message.requests.HttpRequest
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import kotlinx.coroutines.runBlocking
@@ -229,6 +230,19 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
                 }
             }
         }
+
+        mcpTool<StartActiveScan>(
+            "Starts an active vulnerability scan on the given HTTP request using the Burp Scanner. " +
+            "Sends the request first to capture a baseline response, then passes it to the scanner. " +
+            "Use get_scanner_issues to poll for discovered vulnerabilities. Pro only."
+        ) {
+            api.logging().logToOutput("MCP starting active scan: $targetHostname:$targetPort")
+            val fixedContent = content.replace("\r", "").replace("\n", "\r\n")
+            val request = HttpRequest.httpRequest(toMontoyaService(), fixedContent)
+            val baselineResponse = api.http().sendRequest(request)
+            api.scanner().startActiveScan(targetHostname, targetPort, usesHttps, listOf(baselineResponse))
+            "Active scan started against $targetHostname:$targetPort. Use get_scanner_issues to poll for results."
+        }
     }
 
     mcpPaginatedTool<GetProxyHttpHistory>("Displays items within the proxy HTTP history") {
@@ -277,6 +291,62 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
 
         val compiledRegex = Pattern.compile(regex)
         api.proxy().webSocketHistory { it.contains(compiledRegex) }.asSequence()
+            .map { truncateIfNeeded(Json.encodeToString(it.toSerializableForm())) }
+    }
+
+    // -------------------------------------------------------------------------
+    // History by index
+    // -------------------------------------------------------------------------
+
+    mcpTool<GetProxyHttpHistoryItem>(
+        "Returns a single proxy HTTP history entry by its zero-based index. " +
+        "Use get_proxy_http_history to discover valid indices."
+    ) {
+        val allowed = runBlocking {
+            checkHistoryPermissionOrDeny(HistoryAccessType.HTTP_HISTORY, config, api, "HTTP history")
+        }
+        if (!allowed) return@mcpTool "HTTP history access denied by Burp Suite"
+
+        val history = api.proxy().history()
+        if (index < 0 || index >= history.size) {
+            return@mcpTool "Index $index is out of range. History contains ${history.size} item(s)."
+        }
+        truncateIfNeeded(Json.encodeToString(history[index].toSerializableForm()))
+    }
+
+    // -------------------------------------------------------------------------
+    // Scope
+    // -------------------------------------------------------------------------
+
+    mcpTool<IsInScope>("Checks whether a URL is within the Burp Suite target scope.") {
+        val inScope = api.scope().isInScope(url)
+        if (inScope) "In scope: $url" else "NOT in scope: $url"
+    }
+
+    mcpTool<AddToScope>("Adds a URL to the Burp Suite target scope.") {
+        api.scope().includeInScope(url)
+        "Added to scope: $url"
+    }
+
+    mcpTool<RemoveFromScope>("Removes a URL from the Burp Suite target scope.") {
+        api.scope().excludeFromScope(url)
+        "Removed from scope: $url"
+    }
+
+    // -------------------------------------------------------------------------
+    // Site map
+    // -------------------------------------------------------------------------
+
+    mcpPaginatedTool<GetSiteMap>("Returns paginated entries from the Burp Suite target sitemap.") {
+        api.siteMap().requestResponses().asSequence()
+            .map { truncateIfNeeded(Json.encodeToString(it.toSerializableForm())) }
+    }
+
+    mcpPaginatedTool<GetSiteMapForUrl>(
+        "Returns paginated sitemap entries whose URL starts with the given prefix. " +
+        "Useful for drilling into a specific host or path."
+    ) {
+        api.siteMap().requestResponsesForUrl(url).asSequence()
             .map { truncateIfNeeded(Json.encodeToString(it.toSerializableForm())) }
     }
 
@@ -427,3 +497,33 @@ data class GenerateCollaboratorPayload(
 data class GetCollaboratorInteractions(
     val payloadId: String? = null
 )
+
+@Serializable
+data class StartActiveScan(
+    val content: String,
+    override val targetHostname: String,
+    override val targetPort: Int,
+    override val usesHttps: Boolean
+) : HttpServiceParams
+
+@Serializable
+data class GetProxyHttpHistoryItem(val index: Int)
+
+@Serializable
+data class IsInScope(val url: String)
+
+@Serializable
+data class AddToScope(val url: String)
+
+@Serializable
+data class RemoveFromScope(val url: String)
+
+@Serializable
+data class GetSiteMap(override val count: Int, override val offset: Int) : Paginated
+
+@Serializable
+data class GetSiteMapForUrl(
+    val url: String,
+    override val count: Int,
+    override val offset: Int
+) : Paginated
