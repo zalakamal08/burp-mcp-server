@@ -27,6 +27,7 @@ import java.awt.EventQueue
 import java.awt.KeyboardFocusManager
 import java.util.regex.Pattern
 import javax.swing.JCheckBox
+import javax.swing.JComboBox
 import javax.swing.JTabbedPane
 import javax.swing.JTextArea
 import javax.swing.JTextField
@@ -490,23 +491,6 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
         }
     }
 
-    if (enabled("get_repeater_tab_request")) mcpTool<GetRepeaterTabRequest>(
-        "Returns the raw HTTP request loaded in the specified Repeater tab together with the resolved target host, port, and HTTPS flag. " +
-        "Use list_repeater_tabs first to discover valid tab indices."
-    ) {
-        repeaterTabDetails(tabIndex, api)
-            ?: "Could not read Repeater tab $tabIndex. Verify the index is valid and the tab contains a request."
-    }
-
-    if (enabled("get_repeater_tab_response")) mcpTool<GetRepeaterTabResponse>(
-        "Returns the last HTTP response shown in the specified Repeater tab. " +
-        "Returns empty if the request has not been sent yet. " +
-        "Use send_repeater_tab_request to send the request first, then call this to read the response."
-    ) {
-        repeaterTabResponseText(tabIndex, api)
-            ?: "No response in Repeater tab $tabIndex yet — send the request first."
-    }
-
     if (enabled("get_repeater_tab")) mcpTool<GetRepeaterTab>(
         "Returns both the current request and last response from a Repeater tab in a single call. " +
         "Ideal for reviewing tab state before or after sending. " +
@@ -528,7 +512,7 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
 
     if (enabled("set_repeater_tab_request")) mcpTool<SetRepeaterTabRequest>(
         "Replaces the raw HTTP request text in the specified Repeater tab. " +
-        "Use this to modify payloads for iterative testing: set the request, call send_repeater_tab_request, then get_repeater_tab_response. " +
+        "Use this to modify payloads for iterative testing: set the request, call send_repeater_tab_request, then get_repeater_tab to see request+response. " +
         "Use list_repeater_tabs to discover valid tab indices."
     ) {
         val frame = api.userInterface().swingUtils().suiteFrame()
@@ -567,6 +551,35 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
         val httpRequest = HttpRequest.httpRequest(HttpService.httpService(info.hostname, info.port, info.usesHttps), fixedRequest)
         val response = api.http().sendRequest(httpRequest)
         response?.toString() ?: "<no response>"
+    }
+
+    if (enabled("list_repeater_tab_history")) mcpTool<ListRepeaterTabHistory>(
+        "Lists all entries in a Repeater tab's send history — the same list shown by the navigation dropdown " +
+        "next to the < > arrows. Each entry shows its 0-based index and the URL that was requested. " +
+        "Use get_repeater_tab_history_item to read the full request and response for any entry."
+    ) {
+        val items = repeaterTabHistory(tabIndex, api)
+        when {
+            items == null -> "History dropdown not found in Repeater tab $tabIndex — this may not be supported in your Burp version."
+            items.isEmpty() -> "No history entries in Repeater tab $tabIndex yet."
+            else -> items.mapIndexed { i, entry -> "$i: $entry" }.joinToString("\n")
+        }
+    }
+
+    if (enabled("get_repeater_tab_history_item")) mcpTool<GetRepeaterTabHistoryItem>(
+        "Returns the full request and response for a specific history entry in a Repeater tab. " +
+        "Use list_repeater_tab_history first to discover valid indices. " +
+        "The tab is briefly navigated to that history entry then restored to its original position."
+    ) {
+        val entry = repeaterTabHistoryItem(tabIndex, historyIndex, api)
+            ?: return@mcpTool "Could not read history item $historyIndex from Repeater tab $tabIndex. " +
+                              "Use list_repeater_tab_history to verify the index is valid."
+        buildString {
+            appendLine("=== REQUEST ===")
+            appendLine(entry.first)
+            appendLine("=== RESPONSE ===")
+            append(entry.second ?: "(no response recorded for this history entry)")
+        }
     }
 
     if (enabled("get_active_editor_contents")) mcpTool("get_active_editor_contents", "Outputs the contents of the user's active message editor") {
@@ -740,12 +753,6 @@ data class StartPassiveScan(
 ) : HttpServiceParams
 
 @Serializable
-data class GetRepeaterTabRequest(val tabIndex: Int)
-
-@Serializable
-data class GetRepeaterTabResponse(val tabIndex: Int)
-
-@Serializable
 data class GetRepeaterTab(val tabIndex: Int)
 
 @Serializable
@@ -753,6 +760,12 @@ data class SetRepeaterTabRequest(val tabIndex: Int, val request: String)
 
 @Serializable
 data class SendRepeaterTabRequest(val tabIndex: Int)
+
+@Serializable
+data class ListRepeaterTabHistory(val tabIndex: Int)
+
+@Serializable
+data class GetRepeaterTabHistoryItem(val tabIndex: Int, val historyIndex: Int)
 
 @Serializable
 data class ExtractFromResponse(
@@ -795,16 +808,6 @@ private fun repeaterTabs(api: MontoyaApi): List<Pair<Int, String>> {
     return result
 }
 
-private fun repeaterTabDetails(tabIndex: Int, api: MontoyaApi): String? {
-    val info = repeaterTabConnectionInfo(tabIndex, api) ?: return null
-    return buildString {
-        appendLine("Target: ${if (info.usesHttps) "https" else "http"}://${info.hostname}:${info.port}")
-        appendLine("HTTPS: ${info.usesHttps}")
-        appendLine()
-        append(info.request)
-    }
-}
-
 private fun repeaterTabConnectionInfo(tabIndex: Int, api: MontoyaApi): RepeaterConnectionInfo? {
     val frame = api.userInterface().swingUtils().suiteFrame()
     var result: RepeaterConnectionInfo? = null
@@ -840,6 +843,55 @@ private fun repeaterTabResponseText(tabIndex: Int, api: MontoyaApi): String? {
         if (tabIndex < 0 || tabIndex >= pane.tabCount) return@runOnEdt
         val tabComp = pane.getComponentAt(tabIndex) as? Container ?: return@runOnEdt
         result = findRepeaterResponseArea(tabComp)?.text?.takeIf { it.isNotBlank() }
+    }
+    return result
+}
+
+// Finds the history navigation JComboBox in a Repeater tab (the dropdown beside the < > arrows).
+private fun findRepeaterHistoryComboBox(container: Container): JComboBox<*>? {
+    val queue = ArrayDeque<Component>()
+    queue.add(container)
+    while (queue.isNotEmpty()) {
+        val comp = queue.removeFirst()
+        if (comp is JComboBox<*> && comp.itemCount > 0) return comp
+        if (comp is Container) comp.components.forEach { queue.add(it) }
+    }
+    return null
+}
+
+private fun repeaterTabHistory(tabIndex: Int, api: MontoyaApi): List<String>? {
+    val frame = api.userInterface().swingUtils().suiteFrame()
+    var result: List<String>? = null
+    runOnEdt {
+        val pane = findRepeaterInnerTabbedPane(frame) ?: return@runOnEdt
+        if (tabIndex < 0 || tabIndex >= pane.tabCount) return@runOnEdt
+        val tabComp = pane.getComponentAt(tabIndex) as? Container ?: return@runOnEdt
+        val combo = findRepeaterHistoryComboBox(tabComp) ?: return@runOnEdt
+        result = (0 until combo.itemCount).map { combo.getItemAt(it)?.toString() ?: "(entry $it)" }
+    }
+    return result
+}
+
+private fun repeaterTabHistoryItem(tabIndex: Int, historyIndex: Int, api: MontoyaApi): Pair<String, String?>? {
+    val frame = api.userInterface().swingUtils().suiteFrame()
+    var result: Pair<String, String?>? = null
+    runOnEdt {
+        val pane = findRepeaterInnerTabbedPane(frame) ?: return@runOnEdt
+        if (tabIndex < 0 || tabIndex >= pane.tabCount) return@runOnEdt
+        val tabComp = pane.getComponentAt(tabIndex) as? Container ?: return@runOnEdt
+        val combo = findRepeaterHistoryComboBox(tabComp) ?: return@runOnEdt
+        if (historyIndex < 0 || historyIndex >= combo.itemCount) return@runOnEdt
+        val originalIndex = combo.selectedIndex
+        try {
+            combo.selectedIndex = historyIndex
+            tabComp.validate()
+            val request = findRepeaterRequestArea(tabComp)?.text ?: return@runOnEdt
+            val response = findRepeaterResponseArea(tabComp)?.text?.takeIf { it.isNotBlank() }
+            result = request to response
+        } finally {
+            combo.selectedIndex = originalIndex
+            tabComp.validate()
+        }
     }
     return result
 }
