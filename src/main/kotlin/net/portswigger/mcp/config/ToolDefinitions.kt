@@ -13,8 +13,11 @@ object ToolDefinitions {
         // Repeater
         ToolDef("create_repeater_tab", "Create Repeater tab", "Repeater"),
         ToolDef("list_repeater_tabs", "List Repeater tabs", "Repeater"),
-        ToolDef("get_repeater_tab_request", "Get Repeater tab request", "Repeater"),
-        ToolDef("send_repeater_tab_request", "Send Repeater tab request", "Repeater"),
+        ToolDef("get_repeater_tab", "Get tab request + response", "Repeater"),
+        ToolDef("get_repeater_tab_request", "Get tab request", "Repeater"),
+        ToolDef("get_repeater_tab_response", "Get tab response", "Repeater"),
+        ToolDef("set_repeater_tab_request", "Set tab request", "Repeater"),
+        ToolDef("send_repeater_tab_request", "Send tab request", "Repeater"),
 
         // Proxy
         ToolDef("get_proxy_http_history", "Get HTTP history", "Proxy"),

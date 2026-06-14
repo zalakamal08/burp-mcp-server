@@ -26,6 +26,7 @@ import java.awt.Container
 import java.awt.EventQueue
 import java.awt.KeyboardFocusManager
 import java.util.regex.Pattern
+import javax.swing.JCheckBox
 import javax.swing.JTabbedPane
 import javax.swing.JTextArea
 import javax.swing.JTextField
@@ -497,10 +498,58 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
             ?: "Could not read Repeater tab $tabIndex. Verify the index is valid and the tab contains a request."
     }
 
+    if (enabled("get_repeater_tab_response")) mcpTool<GetRepeaterTabResponse>(
+        "Returns the last HTTP response shown in the specified Repeater tab. " +
+        "Returns empty if the request has not been sent yet. " +
+        "Use send_repeater_tab_request to send the request first, then call this to read the response."
+    ) {
+        repeaterTabResponseText(tabIndex, api)
+            ?: "No response in Repeater tab $tabIndex yet — send the request first."
+    }
+
+    if (enabled("get_repeater_tab")) mcpTool<GetRepeaterTab>(
+        "Returns both the current request and last response from a Repeater tab in a single call. " +
+        "Ideal for reviewing tab state before or after sending. " +
+        "Use list_repeater_tabs to discover valid tab indices."
+    ) {
+        val info = repeaterTabConnectionInfo(tabIndex, api)
+            ?: return@mcpTool "Could not read Repeater tab $tabIndex. Verify the index is valid and the tab contains a request."
+        val responseText = repeaterTabResponseText(tabIndex, api) ?: "(no response yet — send the request first)"
+        buildString {
+            appendLine("=== TARGET ===")
+            appendLine("${if (info.usesHttps) "https" else "http"}://${info.hostname}:${info.port}")
+            appendLine()
+            appendLine("=== REQUEST ===")
+            appendLine(info.request)
+            appendLine("=== RESPONSE ===")
+            append(responseText)
+        }
+    }
+
+    if (enabled("set_repeater_tab_request")) mcpTool<SetRepeaterTabRequest>(
+        "Replaces the raw HTTP request text in the specified Repeater tab. " +
+        "Use this to modify payloads for iterative testing: set the request, call send_repeater_tab_request, then get_repeater_tab_response. " +
+        "Use list_repeater_tabs to discover valid tab indices."
+    ) {
+        val frame = api.userInterface().swingUtils().suiteFrame()
+        var success = false
+        runOnEdt {
+            val pane = findRepeaterInnerTabbedPane(frame) ?: return@runOnEdt
+            if (tabIndex < 0 || tabIndex >= pane.tabCount) return@runOnEdt
+            val tabComp = pane.getComponentAt(tabIndex) as? Container ?: return@runOnEdt
+            val area = findRepeaterRequestArea(tabComp) ?: return@runOnEdt
+            area.text = request
+            success = true
+        }
+        if (success) "Request updated in Repeater tab $tabIndex"
+        else "Could not update Repeater tab $tabIndex. Verify the index is valid."
+    }
+
     if (enabled("send_repeater_tab_request")) mcpTool<SendRepeaterTabRequest>(
         "Sends the HTTP request from the specified Repeater tab through Burp's HTTP engine and returns the full response. " +
-        "The target host, port, and scheme are auto-detected from the Repeater tab's target field. " +
-        "Use list_repeater_tabs first to discover valid tab indices."
+        "The target host, port, and scheme are auto-detected from the Repeater tab's target field and HTTPS toggle. " +
+        "Use list_repeater_tabs first to discover valid tab indices. " +
+        "After sending, use get_repeater_tab_response to read the response, or use get_repeater_tab to see both."
     ) {
         val info = repeaterTabConnectionInfo(tabIndex, api)
             ?: return@mcpTool "Could not read Repeater tab $tabIndex. Verify the index is valid and the tab has a request with a Host header."
@@ -513,7 +562,7 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
             return@mcpTool "Send HTTP request denied by Burp Suite"
         }
 
-        api.logging().logToOutput("MCP sending Repeater tab $tabIndex: ${info.hostname}:${info.port}")
+        api.logging().logToOutput("MCP sending Repeater tab $tabIndex: ${if (info.usesHttps) "https" else "http"}://${info.hostname}:${info.port}")
         val fixedRequest = info.request.replace("\r", "").replace("\n", "\r\n")
         val httpRequest = HttpRequest.httpRequest(HttpService.httpService(info.hostname, info.port, info.usesHttps), fixedRequest)
         val response = api.http().sendRequest(httpRequest)
@@ -694,6 +743,15 @@ data class StartPassiveScan(
 data class GetRepeaterTabRequest(val tabIndex: Int)
 
 @Serializable
+data class GetRepeaterTabResponse(val tabIndex: Int)
+
+@Serializable
+data class GetRepeaterTab(val tabIndex: Int)
+
+@Serializable
+data class SetRepeaterTabRequest(val tabIndex: Int, val request: String)
+
+@Serializable
 data class SendRepeaterTabRequest(val tabIndex: Int)
 
 @Serializable
@@ -754,14 +812,34 @@ private fun repeaterTabConnectionInfo(tabIndex: Int, api: MontoyaApi): RepeaterC
         val pane = findRepeaterInnerTabbedPane(frame) ?: return@runOnEdt
         if (tabIndex < 0 || tabIndex >= pane.tabCount) return@runOnEdt
         val tabComp = pane.getComponentAt(tabIndex) as? Container ?: return@runOnEdt
-        val requestText = findRepeaterRequestText(tabComp) ?: return@runOnEdt
+        val requestText = findRepeaterRequestArea(tabComp)?.text ?: return@runOnEdt
+
+        // Priority 1: target URL field has the full scheme://host:port
         val targetUrl = findRepeaterTargetUrl(tabComp)
-        val (hostname, port, https) = if (targetUrl != null) {
-            parseRepeaterTargetUrl(targetUrl) ?: deriveTargetFromHostHeader(requestText)
+        val fromUrl = targetUrl?.let { parseRepeaterTargetUrl(it) }
+
+        val (hostname, port, https) = if (fromUrl != null) {
+            fromUrl
         } else {
-            deriveTargetFromHostHeader(requestText)
-        } ?: return@runOnEdt
+            // Priority 2: Host header for host/port, HTTPS checkbox for scheme
+            val fromHost = deriveTargetFromHostHeader(requestText) ?: return@runOnEdt
+            val httpsFromCheckbox = findRepeaterHttpsState(tabComp)
+            Triple(fromHost.first, fromHost.second, httpsFromCheckbox ?: fromHost.third)
+        }
+
         result = RepeaterConnectionInfo(requestText, hostname, port, https)
+    }
+    return result
+}
+
+private fun repeaterTabResponseText(tabIndex: Int, api: MontoyaApi): String? {
+    val frame = api.userInterface().swingUtils().suiteFrame()
+    var result: String? = null
+    runOnEdt {
+        val pane = findRepeaterInnerTabbedPane(frame) ?: return@runOnEdt
+        if (tabIndex < 0 || tabIndex >= pane.tabCount) return@runOnEdt
+        val tabComp = pane.getComponentAt(tabIndex) as? Container ?: return@runOnEdt
+        result = findRepeaterResponseArea(tabComp)?.text?.takeIf { it.isNotBlank() }
     }
     return result
 }
@@ -800,7 +878,7 @@ private fun findFirstTabbedPane(container: Container): JTabbedPane? {
 
 private val HTTP_VERBS = listOf("GET ", "POST ", "PUT ", "DELETE ", "PATCH ", "HEAD ", "OPTIONS ", "CONNECT ", "TRACE ")
 
-private fun findRepeaterRequestText(container: Container): String? {
+private fun collectTextAreas(container: Container): List<JTextArea> {
     val areas = mutableListOf<JTextArea>()
     val queue = ArrayDeque<Component>()
     queue.add(container)
@@ -809,8 +887,39 @@ private fun findRepeaterRequestText(container: Container): String? {
         if (comp is JTextArea) areas.add(comp)
         if (comp is Container) comp.components.forEach { queue.add(it) }
     }
-    return areas.firstOrNull { area -> HTTP_VERBS.any { area.text.trimStart().startsWith(it) } }?.text
-        ?: areas.firstOrNull { it.isEditable }?.text
+    return areas
+}
+
+private fun findRepeaterRequestArea(container: Container): JTextArea? {
+    val areas = collectTextAreas(container)
+    return areas.firstOrNull { area -> HTTP_VERBS.any { area.text.trimStart().startsWith(it) } }
+        ?: areas.firstOrNull { it.isEditable }
+}
+
+private fun findRepeaterResponseArea(container: Container): JTextArea? {
+    val areas = collectTextAreas(container)
+    // Response status line starts with "HTTP/" but is NOT an HTTP verb line
+    return areas.firstOrNull { area ->
+        val t = area.text.trimStart()
+        t.startsWith("HTTP/") && !HTTP_VERBS.any { t.startsWith(it) }
+    }
+}
+
+// Looks for an HTTPS checkbox or toggle in the tab's Swing tree (Burp labels it "HTTPS", "SSL", or "TLS").
+private fun findRepeaterHttpsState(container: Container): Boolean? {
+    val queue = ArrayDeque<Component>()
+    queue.add(container)
+    while (queue.isNotEmpty()) {
+        val comp = queue.removeFirst()
+        if (comp is JCheckBox) {
+            val label = comp.text?.lowercase() ?: ""
+            if (label.contains("https") || label.contains("ssl") || label.contains("tls")) {
+                return comp.isSelected
+            }
+        }
+        if (comp is Container) comp.components.forEach { queue.add(it) }
+    }
+    return null
 }
 
 private fun findRepeaterTargetUrl(container: Container): String? {
@@ -849,7 +958,9 @@ private fun deriveTargetFromHostHeader(request: String): Triple<String, Int, Boo
     return if (hostValue.contains(":")) {
         val parts = hostValue.split(":")
         val port = parts[1].trim().toIntOrNull() ?: 80
-        Triple(parts[0].trim(), port, port == 443)
+        // Use port to make a best-effort HTTPS guess; caller may override via the HTTPS checkbox
+        val httpsGuess = port == 443 || port == 8443
+        Triple(parts[0].trim(), port, httpsGuess)
     } else {
         Triple(hostValue, 80, false)
     }
