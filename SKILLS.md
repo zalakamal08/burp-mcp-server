@@ -4,16 +4,19 @@ This repo ships a **Claude Code skill** that teaches an AI agent how to use the
 Burp MCP tools *efficiently* — the right tool for each job, minimal token spend,
 and the standard web-pentest workflows.
 
-- 📄 Skill content: [`.claude/skills/burp-mcp/SKILL.md`](.claude/skills/burp-mcp/SKILL.md)
-- ⚡ Slash command: [`.claude/commands/install-burp-skill.md`](.claude/commands/install-burp-skill.md)
+- 📄 Skill content: [`SKILL.md`](SKILL.md)
+- 🛠 Installer: [`install-skill.sh`](install-skill.sh)
+
+The skill is **not** committed under a `.claude/` directory — it lives as a plain
+`SKILL.md` at the repo root. You install it into your own Claude Code skills
+directory with a single command that pulls it from GitHub.
 
 ---
 
-## Install the skill in Claude Code
+## Install the skill (one command)
 
-### Option 1 — One-line installer (global, recommended)
-
-Installs to `~/.claude/skills/burp-mcp` so it loads in **every** Claude Code session:
+Installs to `~/.claude/skills/burp-mcp/SKILL.md` so it loads in **every** Claude
+Code session:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zalakamal08/burp-mcp-server/main/install-skill.sh | bash
@@ -25,21 +28,8 @@ Or, from a local clone:
 ./install-skill.sh
 ```
 
-### Option 2 — Slash command (inside Claude Code)
-
-When running Claude Code inside this repo, the project command is auto-discovered.
-Just type:
-
-```
-/install-burp-skill
-```
-
-This copies the skill into `~/.claude/skills/burp-mcp` for you.
-
-### Option 3 — Project-local (zero install)
-
-If you run Claude Code from inside this repository, the skill in
-`.claude/skills/burp-mcp/` is picked up automatically — no install needed.
+The installer simply downloads `SKILL.md` from GitHub and drops it into
+`~/.claude/skills/burp-mcp/`.
 
 ---
 
@@ -56,8 +46,7 @@ the `mcp__burp__*` tools. You can also invoke it explicitly:
 
 ## What the skill teaches
 
-A condensed version of the golden rules (full detail in
-[`SKILL.md`](.claude/skills/burp-mcp/SKILL.md)):
+A condensed version of the golden rules (full detail in [`SKILL.md`](SKILL.md)):
 
 1. **One call, not two** — use `get_repeater_tab` (request **and** response together).
 2. **Filter, don't dump** — `search_proxy_history` / regex history over full history pulls.

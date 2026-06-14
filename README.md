@@ -2,11 +2,11 @@
 
 A Burp Suite extension that exposes Burp tooling to AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/).
 
-> **🤖 Agent skill:** This repo ships a Claude Code skill that teaches AI agents how to use these tools *efficiently*. Install it globally with one line:
+> **🤖 Agent skill:** This repo ships a Claude Code skill ([`SKILL.md`](SKILL.md)) that teaches AI agents how to use these tools *efficiently*. Install it into your Claude Code skills directory with one line:
 > ```bash
 > curl -fsSL https://raw.githubusercontent.com/zalakamal08/burp-mcp-server/main/install-skill.sh | bash
 > ```
-> Inside Claude Code you can also run `/install-burp-skill`. See [SKILLS.md](SKILLS.md) for details.
+> See [SKILLS.md](SKILLS.md) for details.
 
 ## Installation
 
