@@ -12,12 +12,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    # Grants the GITHUB_TOKEN write access to repo contents so the release
-    # step can create releases and upload assets.
-    # Mirror setting in the UI: Settings → Actions → General → Workflow permissions → "Read and write permissions"
-    permissions:
-      contents: write
-
     # Opt in to Node.js 24 now — all actions/checkout, actions/setup-java,
     # actions/upload-artifact, and softprops/action-gh-release still use
     # Node.js 20 internally, which GitHub is deprecating on June 16 2026.
