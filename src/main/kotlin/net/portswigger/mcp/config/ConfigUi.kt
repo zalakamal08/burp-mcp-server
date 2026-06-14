@@ -48,6 +48,7 @@ class ConfigUi(private val config: McpConfig, private val providers: List<Provid
 
     private lateinit var serverConfigurationPanel: ServerConfigurationPanel
     private lateinit var installationPanel: InstallationPanel
+    private lateinit var toolsSelectionPanel: ToolsSelectionPanel
 
     private var toggleListener: ((Boolean) -> Unit)? = null
     private var suppressToggleEvents: Boolean = false
@@ -76,6 +77,11 @@ class ConfigUi(private val config: McpConfig, private val providers: List<Provid
             reinstallNotice = reinstallNotice,
             parentComponent = panel
         )
+
+        toolsSelectionPanel = ToolsSelectionPanel(config).also {
+            // Checkboxes start locked if the extension is currently enabled (server will start)
+            it.setCheckboxesEnabled(!config.enabled)
+        }
     }
 
     fun cleanup() {
@@ -104,21 +110,25 @@ class ConfigUi(private val config: McpConfig, private val providers: List<Provid
             when (state) {
                 ServerState.Starting, ServerState.Stopping -> {
                     enabledToggle.isEnabled = false
+                    toolsSelectionPanel.setCheckboxesEnabled(false)
                 }
 
                 ServerState.Running -> {
                     enabledToggle.isEnabled = true
                     enabledToggle.setState(true, animate = false)
+                    toolsSelectionPanel.setCheckboxesEnabled(false)
                 }
 
                 ServerState.Stopped -> {
                     enabledToggle.isEnabled = true
                     enabledToggle.setState(false, animate = false)
+                    toolsSelectionPanel.setCheckboxesEnabled(true)
                 }
 
                 is ServerState.Failed -> {
                     enabledToggle.isEnabled = true
                     enabledToggle.setState(false, animate = false)
+                    toolsSelectionPanel.setCheckboxesEnabled(true)
 
                     val friendlyMessage = when (state.exception) {
                         is UnresolvedAddressException -> "Unable to resolve address"
@@ -178,6 +188,8 @@ class ConfigUi(private val config: McpConfig, private val providers: List<Provid
         }
 
         rightPanelContent.add(serverConfigurationPanel)
+        rightPanelContent.add(createVerticalStrut(Design.Spacing.MD))
+        rightPanelContent.add(toolsSelectionPanel)
         rightPanelContent.add(createVerticalGlue())
         rightPanelContent.add(reinstallNotice)
         rightPanelContent.add(createVerticalStrut(10))

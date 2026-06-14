@@ -52,8 +52,10 @@ private fun truncateIfNeeded(serialized: String): String {
 }
 
 fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
+    val disabledSet = config.getDisabledToolsList()
+    fun enabled(name: String) = name !in disabledSet
 
-    mcpTool<SendHttp1Request>("Issues an HTTP/1.1 request and returns the response.") {
+    if (enabled("send_http1_request")) mcpTool<SendHttp1Request>("Issues an HTTP/1.1 request and returns the response.") {
         val allowed = runBlocking {
             HttpRequestSecurity.checkHttpRequestPermission(targetHostname, targetPort, config, content, api)
         }
@@ -72,7 +74,7 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
         response?.toString() ?: "<no response>"
     }
 
-    mcpTool<SendHttp2Request>("Issues an HTTP/2 request and returns the response. Do NOT pass headers to the body parameter.") {
+    if (enabled("send_http2_request")) mcpTool<SendHttp2Request>("Issues an HTTP/2 request and returns the response. Do NOT pass headers to the body parameter.") {
         val http2RequestDisplay = buildString {
             pseudoHeaders.forEach { (key, value) ->
                 val headerName = if (key.startsWith(":")) key else ":$key"
@@ -123,44 +125,44 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
         response?.toString() ?: "<no response>"
     }
 
-    mcpTool<CreateRepeaterTab>("Creates a new Repeater tab with the specified HTTP request and optional tab name. Make sure to use carriage returns appropriately.") {
+    if (enabled("create_repeater_tab")) mcpTool<CreateRepeaterTab>("Creates a new Repeater tab with the specified HTTP request and optional tab name. Make sure to use carriage returns appropriately.") {
         val request = HttpRequest.httpRequest(toMontoyaService(), content)
         api.repeater().sendToRepeater(request, tabName)
     }
 
-    mcpTool<SendToIntruder>("Sends an HTTP request to Intruder with the specified HTTP request and optional tab name. Make sure to use carriage returns appropriately.") {
+    if (enabled("send_to_intruder")) mcpTool<SendToIntruder>("Sends an HTTP request to Intruder with the specified HTTP request and optional tab name. Make sure to use carriage returns appropriately.") {
         val request = HttpRequest.httpRequest(toMontoyaService(), content)
         api.intruder().sendToIntruder(request, tabName)
     }
 
-    mcpTool<UrlEncode>("URL encodes the input string") {
+    if (enabled("url_encode")) mcpTool<UrlEncode>("URL encodes the input string") {
         api.utilities().urlUtils().encode(content)
     }
 
-    mcpTool<UrlDecode>("URL decodes the input string") {
+    if (enabled("url_decode")) mcpTool<UrlDecode>("URL decodes the input string") {
         api.utilities().urlUtils().decode(content)
     }
 
-    mcpTool<Base64Encode>("Base64 encodes the input string") {
+    if (enabled("base64_encode")) mcpTool<Base64Encode>("Base64 encodes the input string") {
         api.utilities().base64Utils().encodeToString(content)
     }
 
-    mcpTool<Base64Decode>("Base64 decodes the input string") {
+    if (enabled("base64_decode")) mcpTool<Base64Decode>("Base64 decodes the input string") {
         api.utilities().base64Utils().decode(content).toString()
     }
 
-    mcpTool<GenerateRandomString>("Generates a random string of specified length and character set") {
+    if (enabled("generate_random_string")) mcpTool<GenerateRandomString>("Generates a random string of specified length and character set") {
         api.utilities().randomUtils().randomString(length, characterSet)
     }
 
-    mcpTool(
+    if (enabled("output_project_options")) mcpTool(
         "output_project_options",
         "Outputs current project-level configuration in JSON format. You can use this to determine the schema for available config options."
     ) {
         api.burpSuite().exportProjectOptionsAsJson()
     }
 
-    mcpTool(
+    if (enabled("output_user_options")) mcpTool(
         "output_user_options",
         "Outputs current user-level configuration in JSON format. You can use this to determine the schema for available config options."
     ) {
@@ -170,7 +172,7 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
     val toolingDisabledMessage =
         "User has disabled configuration editing. They can enable it in the MCP tab in Burp by selecting 'Enable tools that can edit your config'"
 
-    mcpTool<SetProjectOptions>("Sets project-level configuration in JSON format. This will be merged with existing configuration. Make sure to export before doing this, so you know what the schema is. Make sure the JSON has a top level 'user_options' object!") {
+    if (enabled("set_project_options")) mcpTool<SetProjectOptions>("Sets project-level configuration in JSON format. This will be merged with existing configuration. Make sure to export before doing this, so you know what the schema is. Make sure the JSON has a top level 'user_options' object!") {
         if (config.configEditingTooling) {
             api.logging().logToOutput("Setting project-level configuration: $json")
             api.burpSuite().importProjectOptionsFromJson(json)
@@ -182,7 +184,7 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
     }
 
 
-    mcpTool<SetUserOptions>("Sets user-level configuration in JSON format. This will be merged with existing configuration. Make sure to export before doing this, so you know what the schema is. Make sure the JSON has a top level 'project_options' object!") {
+    if (enabled("set_user_options")) mcpTool<SetUserOptions>("Sets user-level configuration in JSON format. This will be merged with existing configuration. Make sure to export before doing this, so you know what the schema is. Make sure the JSON has a top level 'project_options' object!") {
         if (config.configEditingTooling) {
             api.logging().logToOutput("Setting user-level configuration: $json")
             api.burpSuite().importUserOptionsFromJson(json)
@@ -194,13 +196,13 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
     }
 
     if (api.burpSuite().version().edition() == BurpSuiteEdition.PROFESSIONAL) {
-        mcpPaginatedTool<GetScannerIssues>("Displays information about issues identified by the scanner") {
+        if (enabled("get_scanner_issues")) mcpPaginatedTool<GetScannerIssues>("Displays information about issues identified by the scanner") {
             api.siteMap().issues().asSequence().map { Json.encodeToString(it.toSerializableForm()) }
         }
 
         val collaboratorClient by lazy { api.collaborator().createClient() }
 
-        mcpTool<GenerateCollaboratorPayload>(
+        if (enabled("generate_collaborator_payload")) mcpTool<GenerateCollaboratorPayload>(
             "Generates a Burp Collaborator payload URL for out-of-band (OOB) testing. " +
             "Inject this payload into requests to detect server-side interactions (DNS lookups, HTTP requests, SMTP). " +
             "Use get_collaborator_interactions with the returned payloadId to check for interactions."
@@ -217,7 +219,7 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
             "Payload: $payload\nPayload ID: ${payload.id()}\nCollaborator server: ${server.address()}"
         }
 
-        mcpTool<GetCollaboratorInteractions>(
+        if (enabled("get_collaborator_interactions")) mcpTool<GetCollaboratorInteractions>(
             "Polls Burp Collaborator for out-of-band interactions (DNS, HTTP, SMTP). " +
             "Optionally filter by payloadId from generate_collaborator_payload. " +
             "Returns interaction details including type, timestamp, client IP, and protocol-specific data."
@@ -239,7 +241,7 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
             }
         }
 
-        mcpTool<StartActiveScan>(
+        if (enabled("start_active_scan")) mcpTool<StartActiveScan>(
             "Starts an active vulnerability scan on the given HTTP request using the Burp Scanner. " +
             "Sends the request first to capture a baseline response, then passes it to the scanner. " +
             "Use get_scanner_issues to poll for discovered vulnerabilities. Pro only."
@@ -252,7 +254,7 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
             "Active crawl+audit started for $targetUrl. Use get_scanner_issues to poll for results."
         }
 
-        mcpTool<StartPassiveScan>(
+        if (enabled("start_passive_scan")) mcpTool<StartPassiveScan>(
             "Runs passive vulnerability checks on the given HTTP request without sending additional requests. " +
             "Sends the request once to obtain a response, then runs Burp passive scan checks on the pair. " +
             "Passive checks detect issues like missing security headers, information disclosure, and insecure cookies. " +
@@ -268,7 +270,7 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
         }
     }
 
-    mcpPaginatedTool<GetProxyHttpHistory>("Displays items within the proxy HTTP history") {
+    if (enabled("get_proxy_http_history")) mcpPaginatedTool<GetProxyHttpHistory>("Displays items within the proxy HTTP history") {
         val allowed = runBlocking {
             checkHistoryPermissionOrDeny(HistoryAccessType.HTTP_HISTORY, config, api, "HTTP history")
         }
@@ -279,7 +281,7 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
         api.proxy().history().asSequence().map { truncateIfNeeded(Json.encodeToString(it.toSerializableForm())) }
     }
 
-    mcpPaginatedTool<GetProxyHttpHistoryRegex>("Displays items matching a specified regex within the proxy HTTP history") {
+    if (enabled("get_proxy_http_history_regex")) mcpPaginatedTool<GetProxyHttpHistoryRegex>("Displays items matching a specified regex within the proxy HTTP history") {
         val allowed = runBlocking {
             checkHistoryPermissionOrDeny(HistoryAccessType.HTTP_HISTORY, config, api, "HTTP history")
         }
@@ -292,7 +294,7 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
             .map { truncateIfNeeded(Json.encodeToString(it.toSerializableForm())) }
     }
 
-    mcpPaginatedTool<GetProxyWebsocketHistory>("Displays items within the proxy WebSocket history") {
+    if (enabled("get_proxy_websocket_history")) mcpPaginatedTool<GetProxyWebsocketHistory>("Displays items within the proxy WebSocket history") {
         val allowed = runBlocking {
             checkHistoryPermissionOrDeny(HistoryAccessType.WEBSOCKET_HISTORY, config, api, "WebSocket history")
         }
@@ -304,7 +306,7 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
             .map { truncateIfNeeded(Json.encodeToString(it.toSerializableForm())) }
     }
 
-    mcpPaginatedTool<GetProxyWebsocketHistoryRegex>("Displays items matching a specified regex within the proxy WebSocket history") {
+    if (enabled("get_proxy_websocket_history_regex")) mcpPaginatedTool<GetProxyWebsocketHistoryRegex>("Displays items matching a specified regex within the proxy WebSocket history") {
         val allowed = runBlocking {
             checkHistoryPermissionOrDeny(HistoryAccessType.WEBSOCKET_HISTORY, config, api, "WebSocket history")
         }
@@ -321,7 +323,7 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
     // History by index
     // -------------------------------------------------------------------------
 
-    mcpTool<GetProxyHttpHistoryItem>(
+    if (enabled("get_proxy_http_history_item")) mcpTool<GetProxyHttpHistoryItem>(
         "Returns a single proxy HTTP history entry by its zero-based index. " +
         "Use get_proxy_http_history to discover valid indices."
     ) {
@@ -341,17 +343,17 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
     // Scope
     // -------------------------------------------------------------------------
 
-    mcpTool<IsInScope>("Checks whether a URL is within the Burp Suite target scope.") {
+    if (enabled("is_in_scope")) mcpTool<IsInScope>("Checks whether a URL is within the Burp Suite target scope.") {
         val inScope = api.scope().isInScope(url)
         if (inScope) "In scope: $url" else "NOT in scope: $url"
     }
 
-    mcpTool<AddToScope>("Adds a URL to the Burp Suite target scope.") {
+    if (enabled("add_to_scope")) mcpTool<AddToScope>("Adds a URL to the Burp Suite target scope.") {
         api.scope().includeInScope(url)
         "Added to scope: $url"
     }
 
-    mcpTool<RemoveFromScope>("Removes a URL from the Burp Suite target scope.") {
+    if (enabled("remove_from_scope")) mcpTool<RemoveFromScope>("Removes a URL from the Burp Suite target scope.") {
         api.scope().excludeFromScope(url)
         "Removed from scope: $url"
     }
@@ -360,12 +362,12 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
     // Site map
     // -------------------------------------------------------------------------
 
-    mcpPaginatedTool<GetSiteMap>("Returns paginated entries from the Burp Suite target sitemap.") {
+    if (enabled("get_site_map")) mcpPaginatedTool<GetSiteMap>("Returns paginated entries from the Burp Suite target sitemap.") {
         api.siteMap().requestResponses().asSequence()
             .map { truncateIfNeeded(Json.encodeToString(it.toSerializableForm())) }
     }
 
-    mcpPaginatedTool<GetSiteMapForUrl>(
+    if (enabled("get_site_map_for_url")) mcpPaginatedTool<GetSiteMapForUrl>(
         "Returns paginated sitemap entries whose URL starts with the given prefix. " +
         "Useful for drilling into a specific host or path."
     ) {
@@ -373,13 +375,13 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
             .map { truncateIfNeeded(Json.encodeToString(it.toSerializableForm())) }
     }
 
-    mcpTool<SetTaskExecutionEngineState>("Sets the state of Burp's task execution engine (paused or unpaused)") {
+    if (enabled("set_task_execution_engine_state")) mcpTool<SetTaskExecutionEngineState>("Sets the state of Burp's task execution engine (paused or unpaused)") {
         api.burpSuite().taskExecutionEngine().state = if (running) RUNNING else PAUSED
 
         "Task execution engine is now ${if (running) "running" else "paused"}"
     }
 
-    mcpTool<SetProxyInterceptState>("Enables or disables Burp Proxy Intercept") {
+    if (enabled("set_proxy_intercept_state")) mcpTool<SetProxyInterceptState>("Enables or disables Burp Proxy Intercept") {
         if (intercepting) {
             api.proxy().enableIntercept()
         } else {
@@ -393,7 +395,7 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
     // Repeater tabs
     // -------------------------------------------------------------------------
 
-    mcpTool("list_repeater_tabs", "Lists all tabs currently open in Burp Suite's Repeater. Returns each tab's zero-based index and display name so you can reference them by index in other Repeater tools.") {
+    if (enabled("list_repeater_tabs")) mcpTool("list_repeater_tabs", "Lists all tabs currently open in Burp Suite's Repeater. Returns each tab's zero-based index and display name so you can reference them by index in other Repeater tools.") {
         val tabs = repeaterTabs(api)
         if (tabs.isEmpty()) {
             "No Repeater tabs found. Make sure Burp's Repeater tab has been opened at least once."
@@ -402,7 +404,7 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
         }
     }
 
-    mcpTool<GetRepeaterTabRequest>(
+    if (enabled("get_repeater_tab_request")) mcpTool<GetRepeaterTabRequest>(
         "Returns the raw HTTP request loaded in the specified Repeater tab together with the resolved target host, port, and HTTPS flag. " +
         "Use list_repeater_tabs first to discover valid tab indices."
     ) {
@@ -410,7 +412,7 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
             ?: "Could not read Repeater tab $tabIndex. Verify the index is valid and the tab contains a request."
     }
 
-    mcpTool<SendRepeaterTabRequest>(
+    if (enabled("send_repeater_tab_request")) mcpTool<SendRepeaterTabRequest>(
         "Sends the HTTP request from the specified Repeater tab through Burp's HTTP engine and returns the full response. " +
         "The target host, port, and scheme are auto-detected from the Repeater tab's target field. " +
         "Use list_repeater_tabs first to discover valid tab indices."
@@ -433,11 +435,11 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
         response?.toString() ?: "<no response>"
     }
 
-    mcpTool("get_active_editor_contents", "Outputs the contents of the user's active message editor") {
+    if (enabled("get_active_editor_contents")) mcpTool("get_active_editor_contents", "Outputs the contents of the user's active message editor") {
         getActiveEditor(api)?.text ?: "<No active editor>"
     }
 
-    mcpTool<SetActiveEditorContents>("Sets the content of the user's active message editor") {
+    if (enabled("set_active_editor_contents")) mcpTool<SetActiveEditorContents>("Sets the content of the user's active message editor") {
         val editor = getActiveEditor(api) ?: return@mcpTool "<No active editor>"
 
         if (!editor.isEditable) {

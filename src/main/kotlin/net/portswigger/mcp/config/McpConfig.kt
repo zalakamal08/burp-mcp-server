@@ -15,6 +15,20 @@ class McpConfig(storage: PersistedObject, private val logging: Logging) {
     var port by storage.int(9876)
     var requireHttpRequestApproval by storage.boolean(false)
     var requireHistoryAccessApproval by storage.boolean(false)
+    private var disabledTools by storage.stringList("")
+
+    fun isToolEnabled(toolName: String): Boolean = toolName !in getDisabledToolsList()
+
+    fun getDisabledToolsList(): Set<String> {
+        return if (disabledTools.isBlank()) emptySet()
+        else disabledTools.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+    }
+
+    fun setToolEnabled(toolName: String, enabled: Boolean) {
+        val current = getDisabledToolsList().toMutableSet()
+        if (enabled) current.remove(toolName) else current.add(toolName)
+        disabledTools = current.joinToString(",")
+    }
 
     private var _alwaysAllowHttpHistory by storage.boolean(false)
     var alwaysAllowHttpHistory: Boolean
