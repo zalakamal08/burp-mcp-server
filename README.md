@@ -6,7 +6,7 @@ A Burp Suite extension that exposes Burp tooling to AI agents via the [Model Con
 > ```bash
 > curl -fsSL https://raw.githubusercontent.com/zalakamal08/burp-mcp-server/main/install-skill.sh | bash
 > ```
-> See [SKILLS.md](SKILLS.md) for details.
+> The installer pulls `SKILL.md` from GitHub into `~/.claude/skills/burp-mcp/`. Once installed it auto-loads when you use the `mcp__burp__*` tools, or invoke it explicitly with `/burp-mcp`.
 
 ## Installation
 
