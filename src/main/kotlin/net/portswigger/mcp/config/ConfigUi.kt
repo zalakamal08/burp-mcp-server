@@ -11,6 +11,7 @@ import net.portswigger.mcp.providers.Provider
 import java.awt.BorderLayout
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
+import java.awt.font.TextAttribute
 import javax.swing.*
 import javax.swing.Box.*
 import javax.swing.JOptionPane.ERROR_MESSAGE
@@ -156,6 +157,27 @@ class ConfigUi(private val config: McpConfig, private val providers: List<Provid
             add(toolsSelectionPanel, BorderLayout.CENTER)
         }
 
+        val creditPanel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.X_AXIS)
+            isOpaque = false
+            alignmentX = LEFT_ALIGNMENT
+            add(object : JLabel("Built by ") {
+                init { updateColors() }
+                override fun updateUI() { super.updateUI(); updateColors() }
+                private fun updateColors() {
+                    font = Design.Typography.bodyMedium
+                    foreground = Design.Colors.onSurfaceVariant
+                }
+            })
+            add(Anchor(text = "@zalakamal08", url = "https://github.com/zalakamal08").apply {
+                // Bold + underline so the username is clearly prominent
+                @Suppress("UNCHECKED_CAST")
+                font = Design.Typography.labelLarge.deriveFont(
+                    mapOf(TextAttribute.UNDERLINE to TextAttribute.UNDERLINE_ON) as Map<TextAttribute, Any>
+                )
+            })
+        }
+
         // Right column: Server Configuration + Installation stacked
         val rightContent = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
@@ -167,6 +189,8 @@ class ConfigUi(private val config: McpConfig, private val providers: List<Provid
             add(reinstallNotice)
             add(createVerticalStrut(Design.Spacing.SM))
             add(installationPanel)
+            add(createVerticalStrut(Design.Spacing.MD))
+            add(creditPanel)
         }
 
         val mainPanel = JPanel(GridBagLayout()).apply {
