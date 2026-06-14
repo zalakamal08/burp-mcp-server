@@ -9,6 +9,8 @@ import net.portswigger.mcp.Swing
 import net.portswigger.mcp.config.components.*
 import net.portswigger.mcp.providers.Provider
 import java.awt.BorderLayout
+import java.awt.GridBagConstraints
+import java.awt.GridBagLayout
 import javax.swing.*
 import javax.swing.Box.*
 import javax.swing.JOptionPane.ERROR_MESSAGE
@@ -144,31 +146,38 @@ class ConfigUi(private val config: McpConfig, private val providers: List<Provid
     }
 
     private fun buildUi() {
-        val content = JPanel().apply {
+        val p = Design.Spacing.LG
+        val gap = Design.Spacing.SM
+
+        // Left column: Exposed Tools panel fills the space and handles its own scrolling
+        val leftColumn = JPanel(BorderLayout()).apply {
+            isOpaque = false
+            border = BorderFactory.createEmptyBorder(p, p, p, gap)
+            add(toolsSelectionPanel, BorderLayout.CENTER)
+        }
+
+        // Right column: Server Configuration + Installation stacked
+        val rightContent = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            background = Design.Colors.surface
-            border = BorderFactory.createEmptyBorder(
-                Design.Spacing.LG, Design.Spacing.LG, Design.Spacing.LG, Design.Spacing.LG
-            )
+            isOpaque = false
+            border = BorderFactory.createEmptyBorder(p, gap, p, p)
+            add(serverConfigurationPanel)
+            add(createVerticalStrut(Design.Spacing.MD))
+            add(createVerticalGlue())
+            add(reinstallNotice)
+            add(createVerticalStrut(Design.Spacing.SM))
+            add(installationPanel)
         }
 
-        val scrollPane = JScrollPane(content).apply {
-            border = null
+        val mainPanel = JPanel(GridBagLayout()).apply {
             background = Design.Colors.surface
-            viewport.background = Design.Colors.surface
-            verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
-            horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
-            verticalScrollBar.unitIncrement = 16
+            val c = GridBagConstraints().apply { fill = GridBagConstraints.BOTH; weighty = 1.0 }
+            c.gridx = 0; c.weightx = 0.6
+            add(leftColumn, c)
+            c.gridx = 1; c.weightx = 0.4
+            add(rightContent, c)
         }
 
-        content.add(serverConfigurationPanel)
-        content.add(createVerticalStrut(Design.Spacing.MD))
-        content.add(toolsSelectionPanel)
-        content.add(createVerticalGlue())
-        content.add(reinstallNotice)
-        content.add(createVerticalStrut(10))
-        content.add(installationPanel)
-
-        panel.add(scrollPane, BorderLayout.CENTER)
+        panel.add(mainPanel, BorderLayout.CENTER)
     }
 }

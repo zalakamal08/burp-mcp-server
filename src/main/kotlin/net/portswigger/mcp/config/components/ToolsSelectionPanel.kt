@@ -4,7 +4,9 @@ import net.portswigger.mcp.config.Design
 import net.portswigger.mcp.config.McpConfig
 import net.portswigger.mcp.config.ToolDef
 import net.portswigger.mcp.config.ToolDefinitions
+import java.awt.BorderLayout
 import java.awt.Dimension
+import java.awt.FlowLayout
 import javax.swing.*
 import javax.swing.Box.createHorizontalStrut
 import javax.swing.Box.createVerticalStrut
@@ -22,10 +24,17 @@ class ToolsSelectionPanel(private val config: McpConfig) : JPanel() {
         }
     }.apply { alignmentX = LEFT_ALIGNMENT }
 
+    private val selectAllButton = Design.createFilledButton("Select All").apply {
+        addActionListener { applyToAll(true) }
+    }
+
+    private val deselectAllButton = Design.createOutlinedButton("Deselect All").apply {
+        addActionListener { applyToAll(false) }
+    }
+
     init {
-        layout = BoxLayout(this, BoxLayout.Y_AXIS)
+        layout = BorderLayout()
         updateColors()
-        alignmentX = LEFT_ALIGNMENT
         buildPanel()
     }
 
@@ -45,20 +54,55 @@ class ToolsSelectionPanel(private val config: McpConfig) : JPanel() {
     }
 
     private fun buildPanel() {
-        add(Design.createSectionLabel("Exposed Tools"))
-        add(createVerticalStrut(Design.Spacing.SM))
-        add(hintLabel)
-        add(createVerticalStrut(Design.Spacing.MD))
+        // Fixed header — never scrolls
+        val header = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+            alignmentX = LEFT_ALIGNMENT
+
+            add(Design.createSectionLabel("Exposed Tools"))
+            add(createVerticalStrut(Design.Spacing.SM))
+            add(hintLabel)
+            add(createVerticalStrut(Design.Spacing.SM))
+
+            val btnRow = JPanel(FlowLayout(FlowLayout.LEFT, Design.Spacing.SM, 0)).apply {
+                isOpaque = false
+                alignmentX = LEFT_ALIGNMENT
+                add(selectAllButton)
+                add(deselectAllButton)
+            }
+            add(btnRow)
+            add(createVerticalStrut(Design.Spacing.MD))
+        }
+
+        // Scrollable checkbox area
+        val checkboxPanel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+            alignmentX = LEFT_ALIGNMENT
+        }
 
         val orderedCategories = ToolDefinitions.categoryOrder.filter { it in ToolDefinitions.byCategory }
-
         orderedCategories.forEachIndexed { idx, category ->
             val tools = ToolDefinitions.byCategory[category] ?: return@forEachIndexed
-            add(createCategoryGroup(category, tools))
+            checkboxPanel.add(createCategoryGroup(category, tools))
             if (idx < orderedCategories.lastIndex) {
-                add(createVerticalStrut(Design.Spacing.SM))
+                checkboxPanel.add(createVerticalStrut(Design.Spacing.SM))
             }
         }
+
+        val scroll = JScrollPane(checkboxPanel).apply {
+            border = null
+            isOpaque = false
+            viewport.isOpaque = false
+            viewport.background = Design.Colors.surface
+            verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
+            horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_NEVER
+            verticalScrollBar.unitIncrement = 16
+        }
+
+        add(header, BorderLayout.NORTH)
+        add(scroll, BorderLayout.CENTER)
     }
 
     private fun createCategoryGroup(category: String, tools: List<ToolDef>): JPanel {
@@ -115,12 +159,19 @@ class ToolsSelectionPanel(private val config: McpConfig) : JPanel() {
         return row
     }
 
-    /**
-     * Lock checkboxes while the extension is running; unlock when stopped.
-     * Shows a hint label when locked so the user knows why they cannot edit.
-     */
+    private fun applyToAll(enabled: Boolean) {
+        checkboxes.forEach { (toolName, cb) ->
+            if (cb.isEnabled) {
+                cb.isSelected = enabled
+                config.setToolEnabled(toolName, enabled)
+            }
+        }
+    }
+
     fun setCheckboxesEnabled(enabled: Boolean) {
         checkboxes.values.forEach { it.isEnabled = enabled }
+        selectAllButton.isEnabled = enabled
+        deselectAllButton.isEnabled = enabled
         hintLabel.isVisible = !enabled
     }
 }
