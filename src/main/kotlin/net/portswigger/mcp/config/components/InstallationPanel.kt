@@ -128,7 +128,7 @@ class InstallationPanel(
             add(
                 Anchor(
                     text = "Manual install steps",
-                    url = "https://github.com/PortSwigger/mcp-server?tab=readme-ov-file#manual-installations"
+                    url = "https://github.com/zalakamal08/burp-mcp-server#manual-installations"
                 )
             )
         }

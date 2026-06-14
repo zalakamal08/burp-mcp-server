@@ -392,6 +392,91 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
     }
 
     // -------------------------------------------------------------------------
+    // Response extraction
+    // -------------------------------------------------------------------------
+
+    if (enabled("extract_from_response")) mcpTool<ExtractFromResponse>(
+        "Extracts all regex matches from an HTTP response string. " +
+        "Use 'group' to select a specific capture group (0 = entire match, 1+ = numbered group). " +
+        "Useful for pulling out CSRF tokens, auth values, redirect URLs, or any pattern from a response. " +
+        "The response can come from send_http1_request, send_http2_request, or any history tool."
+    ) {
+        val compiled = try {
+            Pattern.compile(regex, Pattern.DOTALL)
+        } catch (e: Exception) {
+            return@mcpTool "Invalid regex: ${e.message}"
+        }
+
+        val matcher = compiled.matcher(response)
+        val results = mutableListOf<String>()
+
+        while (matcher.find()) {
+            if (group > matcher.groupCount()) {
+                return@mcpTool "Group $group does not exist — the regex has ${matcher.groupCount()} capture group(s)."
+            }
+            results.add(matcher.group(group) ?: "")
+        }
+
+        if (results.isEmpty()) "No matches found" else results.joinToString("\n")
+    }
+
+    // -------------------------------------------------------------------------
+    // Proxy history search
+    // -------------------------------------------------------------------------
+
+    if (enabled("search_proxy_history")) mcpPaginatedTool<SearchProxyHistory>(
+        "Searches proxy HTTP history with optional filters combined with AND logic. " +
+        "statusCode: exact HTTP status code (200, 302, 401, …). " +
+        "method: HTTP verb, case-insensitive (GET, POST, PUT, …). " +
+        "contentType: substring match on the Content-Type response header (json, html, xml, …). " +
+        "bodyKeyword: case-insensitive substring search in the response body only. " +
+        "Omit any filter to match all values for that field."
+    ) {
+        val allowed = runBlocking {
+            checkHistoryPermissionOrDeny(HistoryAccessType.HTTP_HISTORY, config, api, "HTTP history search")
+        }
+        if (!allowed) return@mcpPaginatedTool sequenceOf("HTTP history access denied by Burp Suite")
+
+        api.proxy().history().asSequence().filter { item ->
+            val reqStr = item.request().toString()
+            val respStr = item.response()?.toString() ?: ""
+
+            // Method: first token of the request line ("GET / HTTP/1.1" → "GET")
+            if (method != null) {
+                val parsedMethod = reqStr.trimStart().split(" ", "\t").firstOrNull() ?: ""
+                if (!parsedMethod.equals(method, ignoreCase = true)) return@filter false
+            }
+
+            // Status code: second token of the response status line ("HTTP/1.1 200 OK" → 200)
+            if (statusCode != null) {
+                val parsedStatus = respStr.lines().firstOrNull()
+                    ?.split(" ")?.getOrNull(1)?.toIntOrNull()
+                if (parsedStatus != statusCode) return@filter false
+            }
+
+            // Content-Type: header section only (before the blank line)
+            if (contentType != null) {
+                val sepIdx = respStr.indexOf("\r\n\r\n")
+                val headerSection = if (sepIdx >= 0) respStr.substring(0, sepIdx) else respStr
+                val hasMatch = headerSection.lines().any { line ->
+                    line.startsWith("Content-Type:", ignoreCase = true) &&
+                    line.contains(contentType, ignoreCase = true)
+                }
+                if (!hasMatch) return@filter false
+            }
+
+            // Body keyword: response body only (after the blank line)
+            if (bodyKeyword != null) {
+                val sepIdx = respStr.indexOf("\r\n\r\n")
+                val body = if (sepIdx >= 0) respStr.substring(sepIdx + 4) else ""
+                if (!body.contains(bodyKeyword, ignoreCase = true)) return@filter false
+            }
+
+            true
+        }.map { truncateIfNeeded(Json.encodeToString(it.toSerializableForm())) }
+    }
+
+    // -------------------------------------------------------------------------
     // Repeater tabs
     // -------------------------------------------------------------------------
 
@@ -610,6 +695,23 @@ data class GetRepeaterTabRequest(val tabIndex: Int)
 
 @Serializable
 data class SendRepeaterTabRequest(val tabIndex: Int)
+
+@Serializable
+data class ExtractFromResponse(
+    val response: String,
+    val regex: String,
+    val group: Int = 0
+)
+
+@Serializable
+data class SearchProxyHistory(
+    val statusCode: Int? = null,
+    val method: String? = null,
+    val contentType: String? = null,
+    val bodyKeyword: String? = null,
+    override val count: Int,
+    override val offset: Int
+) : Paginated
 
 // ---------------------------------------------------------------------------
 // Repeater Swing utilities

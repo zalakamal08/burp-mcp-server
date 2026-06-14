@@ -10,109 +10,126 @@ For more information about the protocol visit: [modelcontextprotocol.io](https:/
 
 - Connect Burp Suite to AI clients through MCP
 - Automatic installation for Claude Desktop
+- Per-tool enable/disable from the extension UI — expose only the tools you need to save agent tokens
 - Comes with packaged Stdio MCP proxy server
+- **Repeater tab tools** — list open Repeater tabs, read requests, and send them through Burp's HTTP engine
+- **Response extraction** — pull regex matches (CSRF tokens, auth values, redirect URLs) from any response string
+- **Proxy history search** — filter HTTP history by status code, method, Content-Type, or body keyword
 
-## Usage
+## Available Tools
 
-- Install the extension in Burp Suite
-- Configure your Burp MCP server in the extension settings
-- Configure your MCP client to use the Burp SSE MCP server or stdio proxy
-- Interact with Burp through your client!
+| Category | Tool | Description |
+|---|---|---|
+| Repeater | `create_repeater_tab` | Send a request to a new Repeater tab |
+| Repeater | `list_repeater_tabs` | List all open Repeater tabs |
+| Repeater | `get_repeater_tab_request` | Read the raw request from a Repeater tab |
+| Repeater | `send_repeater_tab_request` | Send the request in a Repeater tab through Burp |
+| Proxy | `get_proxy_http_history` | Get paginated HTTP proxy history |
+| Proxy | `get_proxy_http_history_regex` | Filter HTTP history by regex |
+| Proxy | `get_proxy_http_history_item` | Get a single history item by index |
+| Proxy | `get_proxy_websocket_history` | Get paginated WebSocket history |
+| Proxy | `get_proxy_websocket_history_regex` | Filter WebSocket history by regex |
+| Proxy | `set_proxy_intercept_state` | Turn proxy intercept on/off |
+| Proxy | `search_proxy_history` | Filter history by status code, method, Content-Type, or body keyword |
+| HTTP | `send_http1_request` | Send an HTTP/1.1 request through Burp |
+| HTTP | `send_http2_request` | Send an HTTP/2 request through Burp |
+| Scope | `is_in_scope` | Check if a URL is in scope |
+| Scope | `add_to_scope` | Add a URL to scope |
+| Scope | `remove_from_scope` | Remove a URL from scope |
+| Site Map | `get_site_map` | Get the full site map |
+| Site Map | `get_site_map_for_url` | Get site map entries for a specific URL |
+| Scanner (Pro) | `get_scanner_issues` | List scanner findings |
+| Scanner (Pro) | `start_active_scan` | Start an active scan |
+| Scanner (Pro) | `start_passive_scan` | Start a passive scan |
+| Scanner (Pro) | `generate_collaborator_payload` | Generate a Burp Collaborator payload |
+| Scanner (Pro) | `get_collaborator_interactions` | Get Collaborator interactions |
+| Intruder | `send_to_intruder` | Send a request to Intruder |
+| Configuration | `output_project_options` | Export project options JSON |
+| Configuration | `output_user_options` | Export user options JSON |
+| Configuration | `set_project_options` | Set project options |
+| Configuration | `set_user_options` | Set user options |
+| Configuration | `set_task_execution_engine_state` | Pause/resume the task engine |
+| Utilities | `url_encode` | URL-encode a string |
+| Utilities | `url_decode` | URL-decode a string |
+| Utilities | `base64_encode` | Base64-encode a string |
+| Utilities | `base64_decode` | Base64-decode a string |
+| Utilities | `generate_random_string` | Generate a random string |
+| Utilities | `extract_from_response` | Extract regex matches from an HTTP response string |
+| Editor | `get_active_editor_contents` | Read the active Burp editor's contents |
+| Editor | `set_active_editor_contents` | Write to the active Burp editor |
 
 ## Installation
 
-### Prerequisites
+### Download the Latest Release
 
-Ensure that the following prerequisites are met before building and installing the extension:
+The easiest way to install is to download the pre-built JAR from the [Releases page](https://github.com/zalakamal08/burp-mcp-server/releases).
 
-1. **Java**: Java must be installed and available in your system's PATH. You can verify this by running `java --version` in your terminal.
-2. **jar Command**: The `jar` command must be executable and available in your system's PATH. You can verify this by running `jar --version` in your terminal. This is required for building and installing the extension.
+### Building from Source
 
-### Building the Extension
-
-1. **Clone the Repository**: Obtain the source code for the MCP Server Extension.
+1. **Clone the Repository**
    ```
-   git clone https://github.com/PortSwigger/mcp-server.git
+   git clone https://github.com/zalakamal08/burp-mcp-server.git
    ```
 
-2. **Navigate to the Project Directory**: Move into the project's root directory.
+2. **Navigate to the Project Directory**
    ```
-   cd mcp-server
+   cd burp-mcp-server
    ```
 
-3. **Build the JAR File**: Use Gradle to build the extension.
+3. **Build the JAR File**
    ```
    ./gradlew embedProxyJar
    ```
 
-   This command compiles the source code and packages it into a JAR file located in `build/libs/burp-mcp-all.jar`.
+   This produces `build/libs/burp-mcp-<version>-all.jar`.
 
 ### Loading the Extension into Burp Suite
 
-1. **Open Burp Suite**: Launch your Burp Suite application.
-2. **Access the Extensions Tab**: Navigate to the `Extensions` tab.
-3. **Add the Extension**:
-    - Click on `Add`.
-    - Set `Extension Type` to `Java`.
-    - Click `Select file ...` and choose the JAR file built in the previous step.
-    - Click `Next` to load the extension.
+1. Open Burp Suite and navigate to the **Extensions** tab.
+2. Click **Add**.
+3. Set **Extension Type** to `Java`.
+4. Click **Select file...** and choose the JAR built above.
+5. Click **Next** to load the extension.
 
-Upon successful loading, the MCP Server Extension will be active within Burp Suite.
+The extension will appear as a new **MCP** tab in Burp Suite.
 
 ## Configuration
 
-### Configuring the Extension
-Configuration for the extension is done through the Burp Suite UI in the `MCP` tab.
-- **Toggle the MCP Server**: The `Enabled` checkbox controls whether the MCP server is active.
-- **Enable config editing**: The `Enable tools that can edit your config` checkbox allows the MCP server to expose tools which can edit Burp configuration files.
-- **Advanced options**: You can configure the port and host for the MCP server. By default, it listens on `http://0.0.0.0:9876`, making it accessible to remote agents on your lab network.
-- **Approvals**: By default, the server does not require manual approval for HTTP requests or History access, making it fully autonomous for lab environments.
+Configuration is done in the **MCP** tab within Burp Suite.
 
-### Claude Desktop Client
+- **Toggle the MCP Server**: The `Enabled` toggle starts or stops the server.
+- **Host / Port**: Configure the host and port. Default is `0.0.0.0:9876`.
+- **Exposed Tools**: Choose which tools to expose to the AI agent. Disable the extension first, then check/uncheck tools. Disabled tools are never registered with the MCP server, saving agent tokens.
 
-To fully utilize the MCP Server Extension with Claude, you need to configure your Claude client settings appropriately.
-The extension has an installer which will automatically configure the client settings for you.
+### Claude Desktop
 
-1. Currently, Claude Desktop only support STDIO MCP Servers
-   for the service it needs.
-   This approach isn't ideal for desktop apps like Burp, so instead, Claude will start a proxy server that points to the
-   Burp instance,  
-   which hosts a web server at a known port (e.g. `localhost:9876` or `<burp-machine-ip>:9876`).
+1. **Run the installer from the extension UI** — this automatically adds Burp to Claude Desktop's config.
 
-2. **Configure Claude to use the Burp MCP server**  
-   You can do this in one of two ways:
+2. **Or manually edit** `~/Library/Application Support/Claude/claude_desktop_config.json`:
+   ```json
+   {
+     "mcpServers": {
+       "burp": {
+         "command": "<path to Java executable>",
+         "args": [
+           "-jar",
+           "/path/to/mcp-proxy-all.jar",
+           "--sse-url",
+           "http://localhost:9876"
+         ]
+       }
+     }
+   }
+   ```
 
-    - **Option 1: Run the installer from the extension**
-      This will add the Burp MCP server to the Claude Desktop config.
-
-    - **Option 2: Manually edit the config file**  
-      Open the file located at `~/Library/Application Support/Claude/claude_desktop_config.json`,
-      and replace or update it with the following:
-      ```json
-      {
-        "mcpServers": {
-          "burp": {
-            "command": "<path to Java executable packaged with Burp>",
-            "args": [
-                "-jar",
-                "/path/to/mcp/proxy/jar/mcp-proxy-all.jar",
-                "--sse-url",
-                "<your Burp MCP server URL configured in the extension>"
-            ]
-          }
-        }
-      }
-      ```
-
-3. **Restart Claude Desktop** - assuming Burp is running with the extension loaded.
+3. **Restart Claude Desktop** with Burp running and the extension loaded.
 
 ## Manual installations
-If you want to install the MCP server manually you can either use the extension's SSE server directly or the packaged
-Stdio proxy server.
 
 ### SSE MCP Server
-In order to use the SSE server directly you can just provide the url for the server in your client's configuration. Depending
-on your client and your configuration in the extension this may be with or without the `/sse` path.
+
+Point your MCP client directly at the SSE server:
+
 ```
 http://<burp-machine-ip>:9876
 ```
@@ -122,23 +139,19 @@ http://<burp-machine-ip>:9876/sse
 ```
 
 ### Stdio MCP Proxy Server
-The source code for the proxy server can be found here: [MCP Proxy Server](https://github.com/PortSwigger/mcp-proxy)
 
-In order to support MCP Clients which only support Stdio MCP Servers, the extension comes packaged with a proxy server for
-passing requests to the SSE MCP server extension.
+The extension comes packaged with a Stdio proxy for clients that only support Stdio MCP servers.
 
-If you want to use the Stdio proxy server you can use the extension's installer option to extract the proxy server jar.
-Once you have the jar you can add the following command and args to your client configuration:
 ```
-/path/to/packaged/burp/java -jar /path/to/proxy/jar/mcp-proxy-all.jar --sse-url http://<burp-machine-ip>:9876
+/path/to/java -jar /path/to/mcp-proxy-all.jar --sse-url http://<burp-machine-ip>:9876
 ```
 
-### Creating / modifying tools
+Use the extension's installer to extract the proxy JAR.
 
-Tools are defined in `src/main/kotlin/net/portswigger/mcp/tools/Tools.kt`. To define new tools, create a new serializable
-data class with the required parameters which will come from the LLM.
+## Creating / Modifying Tools
 
-The tool name is auto-derived from its parameters data class. A description is also needed for the LLM. You can return
-a string (or richer PromptMessageContents) to provide data back to the LLM.
+Tools are defined in `src/main/kotlin/net/portswigger/mcp/tools/Tools.kt`. Create a serializable data class with the tool's parameters, then register it inside `registerTools`. Tool names are auto-derived from the data class name.
 
-Extend the Paginated interface to add auto-pagination support.
+To control which tools appear in the UI panel, add an entry to `src/main/kotlin/net/portswigger/mcp/config/ToolDefinitions.kt`.
+
+Extend the `Paginated` interface to add auto-pagination support.

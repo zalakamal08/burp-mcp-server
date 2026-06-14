@@ -9,8 +9,6 @@ import net.portswigger.mcp.Swing
 import net.portswigger.mcp.config.components.*
 import net.portswigger.mcp.providers.Provider
 import java.awt.BorderLayout
-import java.awt.Component.CENTER_ALIGNMENT
-import java.awt.GridBagLayout
 import javax.swing.*
 import javax.swing.Box.*
 import javax.swing.JOptionPane.ERROR_MESSAGE
@@ -146,31 +144,7 @@ class ConfigUi(private val config: McpConfig, private val providers: List<Provid
     }
 
     private fun buildUi() {
-        val leftPanel = JPanel(GridBagLayout())
-
-        val headerBox = createVerticalBox().apply {
-            add(JLabel("Burp MCP Server").apply {
-                font = Design.Typography.headlineMedium
-                foreground = Design.Colors.onSurface
-                alignmentX = CENTER_ALIGNMENT
-            })
-            add(createVerticalStrut(Design.Spacing.MD))
-            add(JLabel("Burp MCP Server exposes Burp tooling to AI clients.").apply {
-                font = Design.Typography.bodyLarge
-                foreground = Design.Colors.onSurfaceVariant
-                alignmentX = CENTER_ALIGNMENT
-            })
-            add(createVerticalStrut(Design.Spacing.MD))
-            add(
-                Anchor(
-                    text = "Learn more about the Model Context Protocol",
-                    url = "https://modelcontextprotocol.io/introduction"
-                ).apply { alignmentX = CENTER_ALIGNMENT })
-        }
-
-        leftPanel.add(headerBox)
-
-        val rightPanelContent = JPanel().apply {
+        val content = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             background = Design.Colors.surface
             border = BorderFactory.createEmptyBorder(
@@ -178,7 +152,7 @@ class ConfigUi(private val config: McpConfig, private val providers: List<Provid
             )
         }
 
-        val rightPanel = JScrollPane(rightPanelContent).apply {
+        val scrollPane = JScrollPane(content).apply {
             border = null
             background = Design.Colors.surface
             viewport.background = Design.Colors.surface
@@ -187,15 +161,14 @@ class ConfigUi(private val config: McpConfig, private val providers: List<Provid
             verticalScrollBar.unitIncrement = 16
         }
 
-        rightPanelContent.add(serverConfigurationPanel)
-        rightPanelContent.add(createVerticalStrut(Design.Spacing.MD))
-        rightPanelContent.add(toolsSelectionPanel)
-        rightPanelContent.add(createVerticalGlue())
-        rightPanelContent.add(reinstallNotice)
-        rightPanelContent.add(createVerticalStrut(10))
-        rightPanelContent.add(installationPanel)
+        content.add(serverConfigurationPanel)
+        content.add(createVerticalStrut(Design.Spacing.MD))
+        content.add(toolsSelectionPanel)
+        content.add(createVerticalGlue())
+        content.add(reinstallNotice)
+        content.add(createVerticalStrut(10))
+        content.add(installationPanel)
 
-        val columnsPanel = ResponsiveColumnsPanel(leftPanel, rightPanel)
-        panel.add(columnsPanel, BorderLayout.CENTER)
+        panel.add(scrollPane, BorderLayout.CENTER)
     }
 }

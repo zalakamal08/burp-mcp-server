@@ -23,6 +23,7 @@ object ToolDefinitions {
         ToolDef("get_proxy_websocket_history", "Get WebSocket history", "Proxy"),
         ToolDef("get_proxy_websocket_history_regex", "Get WebSocket history (regex filter)", "Proxy"),
         ToolDef("set_proxy_intercept_state", "Set intercept on/off", "Proxy"),
+        ToolDef("search_proxy_history", "Search proxy history", "Proxy"),
 
         // HTTP
         ToolDef("send_http1_request", "Send HTTP/1.1 request", "HTTP"),
@@ -60,6 +61,7 @@ object ToolDefinitions {
         ToolDef("base64_encode", "Base64 encode", "Utilities"),
         ToolDef("base64_decode", "Base64 decode", "Utilities"),
         ToolDef("generate_random_string", "Generate random string", "Utilities"),
+        ToolDef("extract_from_response", "Extract from response (regex)", "Utilities"),
 
         // Editor
         ToolDef("get_active_editor_contents", "Get active editor contents", "Editor"),
