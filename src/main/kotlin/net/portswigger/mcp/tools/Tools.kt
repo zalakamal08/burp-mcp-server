@@ -958,7 +958,7 @@ private fun findRepeaterSendButton(container: Container): AbstractButton? {
 //   - null  → the Send button could not be found/clicked (caller may fall back to a direct send)
 //   - non-null String → the request was dispatched; the response text, or a note if it
 //     completed/timed out without readable response text (so the caller does NOT double-send).
-private fun sendRepeaterTabViaUi(tabIndex: Int, api: MontoyaApi, timeoutMs: Long = 30000): String? {
+private fun sendRepeaterTabViaUi(tabIndex: Int, api: MontoyaApi, timeoutMs: Long = 20000): String? {
     val frame = api.userInterface().swingUtils().suiteFrame()
 
     fun tabContainer(): Container? {
@@ -969,11 +969,20 @@ private fun sendRepeaterTabViaUi(tabIndex: Int, api: MontoyaApi, timeoutMs: Long
 
     var baseline: String? = null
     var clicked = false
+    var sawSending = false
+    // Capture the Send button ONCE so the click target and the enabled-probe are always
+    // the same component (avoids desync if more than one "Send"-labelled button exists).
+    var sendButton: AbstractButton? = null
     runOnEdt {
         val tabComp = tabContainer() ?: return@runOnEdt
         baseline = findRepeaterResponseArea(tabComp)?.text ?: ""
         val sendBtn = findRepeaterSendButton(tabComp) ?: return@runOnEdt
+        sendButton = sendBtn
         sendBtn.doClick()
+        // Burp disables Send synchronously inside the click handler while the request is
+        // in flight; capture that here so fast sends (that re-enable before our first poll)
+        // are still recognised as having started.
+        if (!sendBtn.isEnabled) sawSending = true
         clicked = true
     }
     if (!clicked) return null
@@ -981,13 +990,12 @@ private fun sendRepeaterTabViaUi(tabIndex: Int, api: MontoyaApi, timeoutMs: Long
     // Poll off the EDT until the Send button completes its disabled→enabled cycle,
     // or the response text changes, or we time out.
     val deadline = System.currentTimeMillis() + timeoutMs
-    var sawSending = false
     while (System.currentTimeMillis() < deadline) {
-        Thread.sleep(150)
+        Thread.sleep(100)
         var done = false
         runOnEdt {
             val tabComp = tabContainer() ?: return@runOnEdt
-            val sendEnabled = findRepeaterSendButton(tabComp)?.isEnabled ?: true
+            val sendEnabled = sendButton?.isEnabled ?: true
             if (!sendEnabled) sawSending = true
             val current = findRepeaterResponseArea(tabComp)?.text
             val changed = !current.isNullOrBlank() && current != baseline
