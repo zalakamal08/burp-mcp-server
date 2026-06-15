@@ -59,6 +59,17 @@ private fun truncateIfNeeded(serialized: String): String {
 private fun normalizeHttpLineEndings(raw: String): String =
     raw.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n")
 
+// Splits a raw HTTP message into (headerSection, body) at the first blank line.
+// Tolerates CRLF (\r\n\r\n) and LF-only (\n\n) separators; if no blank line is
+// found, the whole message is treated as headers and the body is empty.
+private fun splitHttpHeadersAndBody(message: String): Pair<String, String> {
+    val crlf = message.indexOf("\r\n\r\n")
+    if (crlf >= 0) return message.substring(0, crlf) to message.substring(crlf + 4)
+    val lf = message.indexOf("\n\n")
+    if (lf >= 0) return message.substring(0, lf) to message.substring(lf + 2)
+    return message to ""
+}
+
 // Truncates a response string to maxChars, preserving the status line + headers
 // (which come first) and appending a note with the full length. A non-positive
 // maxChars disables truncation.
@@ -458,25 +469,24 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
         api.proxy().history().asSequence().filter { item ->
             val reqStr = item.request().toString()
             val respStr = item.response()?.toString() ?: ""
+            val (headerSection, body) = splitHttpHeadersAndBody(respStr)
 
-            // Method: first token of the request line ("GET / HTTP/1.1" → "GET")
+            // Method: first whitespace-delimited token of the request line ("GET / HTTP/1.1" → "GET")
             if (method != null) {
-                val parsedMethod = reqStr.trimStart().split(" ", "\t").firstOrNull() ?: ""
+                val parsedMethod = reqStr.trimStart().split(Regex("\\s+")).firstOrNull() ?: ""
                 if (!parsedMethod.equals(method, ignoreCase = true)) return@filter false
             }
 
-            // Status code: second token of the response status line ("HTTP/1.1 200 OK" → 200)
+            // Status code: second whitespace-delimited token of the status line ("HTTP/1.1 200 OK" → 200)
             if (statusCode != null) {
-                val parsedStatus = respStr.lines().firstOrNull()
-                    ?.split(" ")?.getOrNull(1)?.toIntOrNull()
+                val parsedStatus = respStr.lineSequence().firstOrNull()
+                    ?.trim()?.split(Regex("\\s+"))?.getOrNull(1)?.toIntOrNull()
                 if (parsedStatus != statusCode) return@filter false
             }
 
             // Content-Type: header section only (before the blank line)
             if (contentType != null) {
-                val sepIdx = respStr.indexOf("\r\n\r\n")
-                val headerSection = if (sepIdx >= 0) respStr.substring(0, sepIdx) else respStr
-                val hasMatch = headerSection.lines().any { line ->
+                val hasMatch = headerSection.lineSequence().any { line ->
                     line.startsWith("Content-Type:", ignoreCase = true) &&
                     line.contains(contentType, ignoreCase = true)
                 }
@@ -485,8 +495,6 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
 
             // Body keyword: response body only (after the blank line)
             if (bodyKeyword != null) {
-                val sepIdx = respStr.indexOf("\r\n\r\n")
-                val body = if (sepIdx >= 0) respStr.substring(sepIdx + 4) else ""
                 if (!body.contains(bodyKeyword, ignoreCase = true)) return@filter false
             }
 
@@ -906,15 +914,29 @@ private fun repeaterTabResponseText(tabIndex: Int, api: MontoyaApi): String? {
 }
 
 // Finds the history navigation JComboBox in a Repeater tab (the dropdown beside the < > arrows).
+// A Repeater tab contains several combo boxes (view selectors, inspector, etc.), so we cannot
+// just take the first non-empty one. The history dropdown's entries are request URLs, so we
+// pick the combo box with the most URL-like items (containing "://"). If none qualify we return
+// null rather than risk mutating an unrelated control (e.g. the response view selector).
 private fun findRepeaterHistoryComboBox(container: Container): JComboBox<*>? {
     val queue = ArrayDeque<Component>()
     queue.add(container)
+    var best: JComboBox<*>? = null
+    var bestScore = 0
     while (queue.isNotEmpty()) {
         val comp = queue.removeFirst()
-        if (comp is JComboBox<*> && comp.itemCount > 0) return comp
+        if (comp is JComboBox<*> && comp.itemCount > 0) {
+            val urlItems = (0 until comp.itemCount).count { i ->
+                comp.getItemAt(i)?.toString()?.contains("://") == true
+            }
+            if (urlItems > bestScore) {
+                bestScore = urlItems
+                best = comp
+            }
+        }
         if (comp is Container) comp.components.forEach { queue.add(it) }
     }
-    return null
+    return best
 }
 
 private fun repeaterTabHistory(tabIndex: Int, api: MontoyaApi): List<String>? {
@@ -1049,14 +1071,15 @@ private fun findRepeaterTargetUrl(container: Container): String? {
 private fun parseRepeaterTargetUrl(url: String): Triple<String, Int, Boolean>? {
     return try {
         val https = url.startsWith("https://")
-        val withoutScheme = url.removePrefix("https://").removePrefix("http://").trimEnd('/')
-        val colonIdx = withoutScheme.lastIndexOf(':')
+        // Drop the scheme and any path/query so only the host[:port] authority remains.
+        val authority = url.removePrefix("https://").removePrefix("http://").substringBefore('/')
+        val colonIdx = authority.lastIndexOf(':')
         if (colonIdx >= 0) {
-            val host = withoutScheme.substring(0, colonIdx)
-            val port = withoutScheme.substring(colonIdx + 1).toIntOrNull() ?: if (https) 443 else 80
+            val host = authority.substring(0, colonIdx)
+            val port = authority.substring(colonIdx + 1).toIntOrNull() ?: if (https) 443 else 80
             Triple(host, port, https)
         } else {
-            Triple(withoutScheme, if (https) 443 else 80, https)
+            Triple(authority, if (https) 443 else 80, https)
         }
     } catch (_: Exception) { null }
 }

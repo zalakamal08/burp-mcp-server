@@ -136,6 +136,10 @@ class ConfigUi(private val config: McpConfig, private val providers: List<Provid
                         else -> state.exception.message ?: state.exception.javaClass.simpleName
                     }
 
+                    // Re-enable toggle events BEFORE the modal dialog: it pumps a nested
+                    // event loop, so leaving them suppressed would silently swallow any
+                    // toggle the user clicks while the dialog is open (UI/state desync).
+                    suppressToggleEvents = false
                     Dialogs.showMessageDialog(
                         panel, "Failed to start Burp MCP Server: $friendlyMessage", ERROR_MESSAGE
                     )
