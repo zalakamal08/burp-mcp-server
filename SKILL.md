@@ -38,17 +38,20 @@ This is the workhorse pattern for manual exploitation and fuzzing:
    repeat 3–4 with new payloads
 ```
 
-- **Modify + send in one call.** `send_repeater_tab_request` takes an optional
-  `request` field — pass it to replace the tab's request and send in a single step.
-  This is the efficient fuzzing primitive; you rarely need a separate
-  `set_repeater_tab_request` (that one is for staging a request WITHOUT sending,
-  e.g. preparing an exploit for the user to review).
-- **The send returns the response directly — do NOT re-read it with
-  `get_repeater_tab`.** Agent sends go through Burp's HTTP engine, not the tab's
-  Send button, so they do not update the tab's response panel or its send history.
-  `get_repeater_tab` / `list_repeater_tab_history` reflect the *user's* manual sends
-  in Burp's UI, not yours. Use `get_repeater_tab` to read the request and inspect
-  what the human did; use the send tool's return value for your own responses.
+- **A real Repeater send.** `send_repeater_tab_request` clicks the tab's actual
+  Send button, so the request goes through Repeater just like a manual pentester
+  action: the response appears in the tab and the send is saved to the tab's
+  history. The response is also returned to you directly.
+- **Modify + send in one call.** Pass the optional `request` field to replace the
+  tab's request and send in a single step — the efficient fuzzing primitive (e.g.
+  change `/user/1` to `/user/2` to test authorization). You rarely need a separate
+  `set_repeater_tab_request` (that one stages a request WITHOUT sending, e.g.
+  preparing an exploit for the user to review).
+- **Target overrides switch to a direct send.** If you pass
+  `targetHostname/targetPort/usesHttps` (to hit a different host than the tab is
+  configured for), the request is sent through Burp's engine directly instead of
+  the Send button — the response is returned to you but does NOT appear in the tab
+  or its history. Omit the overrides to get the normal in-tab send.
 
 Notes:
 - The raw request is a full HTTP message: `METHOD path HTTP/1.1\r\nHost: ...\r\n\r\nbody`.
@@ -68,12 +71,14 @@ Notes:
   (e.g. a CDN error page) cannot overflow the token limit. The status line and
   headers are always preserved (they come first). Pass a larger `maxResponseChars`
   if you need more of the body.
-- To compare every payload you've already sent in a tab, use the **send history**:
+- To compare every payload sent in a tab (your normal in-tab sends and the user's
+  manual sends both appear here), use the **send history**:
   ```
   list_repeater_tab_history(0)              → ["0: https://.../login", "1: https://.../login", ...]
   get_repeater_tab_history_item(0, 2)       → full request + response for entry #2
   ```
   This is non-destructive — the tab is briefly navigated then restored.
+  (Target-override/direct sends do not appear here.)
 
 ---
 
