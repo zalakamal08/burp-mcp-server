@@ -518,11 +518,12 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
     }
 
     if (enabled("get_repeater_tab")) mcpTool<GetRepeaterTab>(
-        "Returns the current request and last response from a Repeater tab in a single call. " +
-        "The target (host/port/HTTPS) is auto-detected; if detection is wrong or incomplete you can override it " +
-        "with the optional targetHostname/targetPort/usesHttps fields. " +
-        "Large responses are truncated to maxResponseChars (default 50000) to avoid token overflow. " +
-        "Use list_repeater_tabs to discover valid tab indices."
+        "Returns the request currently loaded in a Repeater tab plus the resolved target, and the response shown " +
+        "in the tab's UI response panel. NOTE: that response reflects the user's last manual send in Burp — it is " +
+        "NOT updated by send_repeater_tab_request (which returns its own response directly). So after an agent send " +
+        "this RESPONSE may be stale or empty; rely on the send tool's return value instead. " +
+        "Target auto-detected; override with targetHostname/targetPort/usesHttps. " +
+        "Response truncated to maxResponseChars (default 50000). Use list_repeater_tabs to discover tab indices."
     ) {
         val info = repeaterTabConnectionInfo(tabIndex, api)
             ?: return@mcpTool "Could not read Repeater tab $tabIndex. Verify the index is valid and the tab contains a request."
@@ -549,32 +550,27 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
     }
 
     if (enabled("set_repeater_tab_request")) mcpTool<SetRepeaterTabRequest>(
-        "Replaces the raw HTTP request text in the specified Repeater tab. " +
-        "Use this to modify payloads for iterative testing: set the request, call send_repeater_tab_request, then get_repeater_tab to see request+response. " +
+        "Replaces the raw HTTP request text in the specified Repeater tab WITHOUT sending it — use this to stage " +
+        "a request for the user to review. To modify and send in one step, pass 'request' to send_repeater_tab_request instead. " +
         "Use list_repeater_tabs to discover valid tab indices."
     ) {
-        val frame = api.userInterface().swingUtils().suiteFrame()
-        var success = false
-        runOnEdt {
-            val pane = findRepeaterInnerTabbedPane(frame) ?: return@runOnEdt
-            if (tabIndex < 0 || tabIndex >= pane.tabCount) return@runOnEdt
-            val tabComp = pane.getComponentAt(tabIndex) as? Container ?: return@runOnEdt
-            val area = findRepeaterRequestArea(tabComp) ?: return@runOnEdt
-            area.text = request
-            success = true
-        }
-        if (success) "Request updated in Repeater tab $tabIndex"
+        if (setRepeaterTabRequestText(tabIndex, request, api)) "Request updated in Repeater tab $tabIndex"
         else "Could not update Repeater tab $tabIndex. Verify the index is valid."
     }
 
     if (enabled("send_repeater_tab_request")) mcpTool<SendRepeaterTabRequest>(
-        "Sends the HTTP request from the specified Repeater tab through Burp's HTTP engine and returns the response. " +
-        "The target host, port, and scheme are auto-detected from the tab's target field and HTTPS toggle. " +
-        "If detection is wrong (e.g. it sends to http:80 when the API needs https:443), override it with the " +
-        "optional targetHostname/targetPort/usesHttps fields — these take priority over auto-detection. " +
-        "Large responses are truncated to maxResponseChars (default 50000) to avoid token overflow. " +
-        "Use list_repeater_tabs first to discover valid tab indices; use get_repeater_tab to review the response."
+        "Sends a Repeater tab's request through Burp's HTTP engine and RETURNS THE RESPONSE directly. " +
+        "Pass the optional 'request' field to replace the tab's request text before sending — this is the " +
+        "efficient way to fuzz: one call modifies and sends. Omit it to send the request already in the tab. " +
+        "Target host/port/scheme are auto-detected; override with targetHostname/targetPort/usesHttps if detection " +
+        "is wrong (these take priority). Large responses are truncated to maxResponseChars (default 50000). " +
+        "Note: the response is returned here directly — it does NOT appear in the tab's response panel or history " +
+        "(those reflect only the user's manual sends in Burp's UI). Use list_repeater_tabs to discover tab indices."
     ) {
+        if (request != null && !setRepeaterTabRequestText(tabIndex, request, api)) {
+            return@mcpTool "Could not update Repeater tab $tabIndex before sending. Verify the index is valid."
+        }
+
         val info = repeaterTabConnectionInfo(tabIndex, api)
             ?: return@mcpTool "Could not read Repeater tab $tabIndex. Verify the index is valid and the tab contains a request."
 
@@ -815,6 +811,7 @@ data class SetRepeaterTabRequest(val tabIndex: Int, val request: String)
 @Serializable
 data class SendRepeaterTabRequest(
     val tabIndex: Int,
+    val request: String? = null,
     val targetHostname: String? = null,
     val targetPort: Int? = null,
     val usesHttps: Boolean? = null,
@@ -906,6 +903,24 @@ private fun repeaterTabConnectionInfo(tabIndex: Int, api: MontoyaApi): RepeaterC
         }
     }
     return result
+}
+
+// Writes raw request text into a Repeater tab's request editor. Shared by
+// set_repeater_tab_request and the inline-request path of send_repeater_tab_request.
+// Returns true on success. Line endings are NOT normalized here so the editor shows
+// exactly what was supplied; the send path normalizes when issuing the request.
+private fun setRepeaterTabRequestText(tabIndex: Int, request: String, api: MontoyaApi): Boolean {
+    val frame = api.userInterface().swingUtils().suiteFrame()
+    var success = false
+    runOnEdt {
+        val pane = findRepeaterInnerTabbedPane(frame) ?: return@runOnEdt
+        if (tabIndex < 0 || tabIndex >= pane.tabCount) return@runOnEdt
+        val tabComp = pane.getComponentAt(tabIndex) as? Container ?: return@runOnEdt
+        val area = findRepeaterRequestArea(tabComp) ?: return@runOnEdt
+        area.text = request
+        success = true
+    }
+    return success
 }
 
 private fun repeaterTabResponseText(tabIndex: Int, api: MontoyaApi): String? {

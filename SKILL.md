@@ -31,12 +31,24 @@ This is the workhorse pattern for manual exploitation and fuzzing:
 
 ```
 1. list_repeater_tabs                       → find the tab index you want (e.g. 0)
-2. get_repeater_tab(tabIndex: 0)            → read current request + last response
-3. set_repeater_tab_request(0, "<modified raw request>")   → inject your payload
-4. send_repeater_tab_request(0)             → send through Burp's engine; returns response
-5. (optional) extract_from_response(...)    → pull the value you care about
-   repeat 3–5 with new payloads
+2. get_repeater_tab(tabIndex: 0)            → read the current request (and the user's last UI response)
+3. send_repeater_tab_request(0, request: "<modified raw request>")
+                                            → sets the request AND sends it in ONE call; returns the response
+4. (optional) extract_from_response(...)    → pull the value you care about
+   repeat 3–4 with new payloads
 ```
+
+- **Modify + send in one call.** `send_repeater_tab_request` takes an optional
+  `request` field — pass it to replace the tab's request and send in a single step.
+  This is the efficient fuzzing primitive; you rarely need a separate
+  `set_repeater_tab_request` (that one is for staging a request WITHOUT sending,
+  e.g. preparing an exploit for the user to review).
+- **The send returns the response directly — do NOT re-read it with
+  `get_repeater_tab`.** Agent sends go through Burp's HTTP engine, not the tab's
+  Send button, so they do not update the tab's response panel or its send history.
+  `get_repeater_tab` / `list_repeater_tab_history` reflect the *user's* manual sends
+  in Burp's UI, not yours. Use `get_repeater_tab` to read the request and inspect
+  what the human did; use the send tool's return value for your own responses.
 
 Notes:
 - The raw request is a full HTTP message: `METHOD path HTTP/1.1\r\nHost: ...\r\n\r\nbody`.
