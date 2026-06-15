@@ -53,6 +53,22 @@ private fun truncateIfNeeded(serialized: String): String {
     }
 }
 
+// Normalizes any mix of \r\n, \r, or \n into proper HTTP CRLF line endings.
+// JSON transport can deliver line endings inconsistently; Burp needs real CRLF
+// to parse a raw HTTP request, so we normalize before handing requests off.
+private fun normalizeHttpLineEndings(raw: String): String =
+    raw.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n")
+
+// Truncates a response string to maxChars, preserving the status line + headers
+// (which come first) and appending a note with the full length. A non-positive
+// maxChars disables truncation.
+private fun truncateResponse(response: String, maxChars: Int): String {
+    if (maxChars <= 0 || response.length <= maxChars) return response
+    return response.substring(0, maxChars) +
+        "\n\n[response truncated at $maxChars chars, full length: ${response.length}. " +
+        "Pass a larger maxResponseChars to see more.]"
+}
+
 fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
     val disabledSet = config.getDisabledToolsList()
     fun enabled(name: String) = name !in disabledSet
@@ -127,13 +143,13 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
         response?.toString() ?: "<no response>"
     }
 
-    if (enabled("create_repeater_tab")) mcpTool<CreateRepeaterTab>("Creates a new Repeater tab with the specified HTTP request and optional tab name. Make sure to use carriage returns appropriately.") {
-        val request = HttpRequest.httpRequest(toMontoyaService(), content)
+    if (enabled("create_repeater_tab")) mcpTool<CreateRepeaterTab>("Creates a new Repeater tab with the specified HTTP request and optional tab name. Line endings are normalized to HTTP CRLF automatically, so \\n in the content is accepted. The tab is targeted at the given targetHostname/targetPort/usesHttps.") {
+        val request = HttpRequest.httpRequest(toMontoyaService(), normalizeHttpLineEndings(content))
         api.repeater().sendToRepeater(request, tabName)
     }
 
-    if (enabled("send_to_intruder")) mcpTool<SendToIntruder>("Sends an HTTP request to Intruder with the specified HTTP request and optional tab name. Make sure to use carriage returns appropriately.") {
-        val request = HttpRequest.httpRequest(toMontoyaService(), content)
+    if (enabled("send_to_intruder")) mcpTool<SendToIntruder>("Sends an HTTP request to Intruder with the specified HTTP request and optional tab name. Line endings are normalized to HTTP CRLF automatically.") {
+        val request = HttpRequest.httpRequest(toMontoyaService(), normalizeHttpLineEndings(content))
         api.intruder().sendToIntruder(request, tabName)
     }
 
@@ -492,21 +508,33 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
     }
 
     if (enabled("get_repeater_tab")) mcpTool<GetRepeaterTab>(
-        "Returns both the current request and last response from a Repeater tab in a single call. " +
-        "Ideal for reviewing tab state before or after sending. " +
+        "Returns the current request and last response from a Repeater tab in a single call. " +
+        "The target (host/port/HTTPS) is auto-detected; if detection is wrong or incomplete you can override it " +
+        "with the optional targetHostname/targetPort/usesHttps fields. " +
+        "Large responses are truncated to maxResponseChars (default 50000) to avoid token overflow. " +
         "Use list_repeater_tabs to discover valid tab indices."
     ) {
         val info = repeaterTabConnectionInfo(tabIndex, api)
             ?: return@mcpTool "Could not read Repeater tab $tabIndex. Verify the index is valid and the tab contains a request."
+
+        val host = targetHostname ?: info.hostname
+        val port = targetPort ?: info.port
+        val https = usesHttps ?: info.usesHttps
+        val targetLine = if (host != null && port != null) {
+            "${if (https == true) "https" else "http"}://$host:$port"
+        } else {
+            "(target could not be auto-detected — pass targetHostname/targetPort/usesHttps when sending)"
+        }
+
         val responseText = repeaterTabResponseText(tabIndex, api) ?: "(no response yet — send the request first)"
         buildString {
             appendLine("=== TARGET ===")
-            appendLine("${if (info.usesHttps) "https" else "http"}://${info.hostname}:${info.port}")
+            appendLine(targetLine)
             appendLine()
             appendLine("=== REQUEST ===")
             appendLine(info.request)
             appendLine("=== RESPONSE ===")
-            append(responseText)
+            append(truncateResponse(responseText, maxResponseChars))
         }
     }
 
@@ -530,27 +558,37 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
     }
 
     if (enabled("send_repeater_tab_request")) mcpTool<SendRepeaterTabRequest>(
-        "Sends the HTTP request from the specified Repeater tab through Burp's HTTP engine and returns the full response. " +
-        "The target host, port, and scheme are auto-detected from the Repeater tab's target field and HTTPS toggle. " +
-        "Use list_repeater_tabs first to discover valid tab indices. " +
-        "After sending, use get_repeater_tab_response to read the response, or use get_repeater_tab to see both."
+        "Sends the HTTP request from the specified Repeater tab through Burp's HTTP engine and returns the response. " +
+        "The target host, port, and scheme are auto-detected from the tab's target field and HTTPS toggle. " +
+        "If detection is wrong (e.g. it sends to http:80 when the API needs https:443), override it with the " +
+        "optional targetHostname/targetPort/usesHttps fields — these take priority over auto-detection. " +
+        "Large responses are truncated to maxResponseChars (default 50000) to avoid token overflow. " +
+        "Use list_repeater_tabs first to discover valid tab indices; use get_repeater_tab to review the response."
     ) {
         val info = repeaterTabConnectionInfo(tabIndex, api)
-            ?: return@mcpTool "Could not read Repeater tab $tabIndex. Verify the index is valid and the tab has a request with a Host header."
+            ?: return@mcpTool "Could not read Repeater tab $tabIndex. Verify the index is valid and the tab contains a request."
+
+        val host = targetHostname ?: info.hostname
+        val port = targetPort ?: info.port
+        val https = usesHttps ?: info.usesHttps ?: false
+        if (host == null || port == null) {
+            return@mcpTool "Could not determine the target for Repeater tab $tabIndex. " +
+                "Pass targetHostname, targetPort, and usesHttps explicitly."
+        }
 
         val allowed = runBlocking {
-            HttpRequestSecurity.checkHttpRequestPermission(info.hostname, info.port, config, info.request, api)
+            HttpRequestSecurity.checkHttpRequestPermission(host, port, config, info.request, api)
         }
         if (!allowed) {
-            api.logging().logToOutput("MCP Repeater tab $tabIndex request denied: ${info.hostname}:${info.port}")
+            api.logging().logToOutput("MCP Repeater tab $tabIndex request denied: $host:$port")
             return@mcpTool "Send HTTP request denied by Burp Suite"
         }
 
-        api.logging().logToOutput("MCP sending Repeater tab $tabIndex: ${if (info.usesHttps) "https" else "http"}://${info.hostname}:${info.port}")
-        val fixedRequest = info.request.replace("\r", "").replace("\n", "\r\n")
-        val httpRequest = HttpRequest.httpRequest(HttpService.httpService(info.hostname, info.port, info.usesHttps), fixedRequest)
+        api.logging().logToOutput("MCP sending Repeater tab $tabIndex: ${if (https) "https" else "http"}://$host:$port")
+        val fixedRequest = normalizeHttpLineEndings(info.request)
+        val httpRequest = HttpRequest.httpRequest(HttpService.httpService(host, port, https), fixedRequest)
         val response = api.http().sendRequest(httpRequest)
-        response?.toString() ?: "<no response>"
+        truncateResponse(response?.toString() ?: "<no response>", maxResponseChars)
     }
 
     if (enabled("list_repeater_tab_history")) mcpTool<ListRepeaterTabHistory>(
@@ -753,13 +791,25 @@ data class StartPassiveScan(
 ) : HttpServiceParams
 
 @Serializable
-data class GetRepeaterTab(val tabIndex: Int)
+data class GetRepeaterTab(
+    val tabIndex: Int,
+    val targetHostname: String? = null,
+    val targetPort: Int? = null,
+    val usesHttps: Boolean? = null,
+    val maxResponseChars: Int = 50000
+)
 
 @Serializable
 data class SetRepeaterTabRequest(val tabIndex: Int, val request: String)
 
 @Serializable
-data class SendRepeaterTabRequest(val tabIndex: Int)
+data class SendRepeaterTabRequest(
+    val tabIndex: Int,
+    val targetHostname: String? = null,
+    val targetPort: Int? = null,
+    val usesHttps: Boolean? = null,
+    val maxResponseChars: Int = 50000
+)
 
 @Serializable
 data class ListRepeaterTabHistory(val tabIndex: Int)
@@ -788,11 +838,14 @@ data class SearchProxyHistory(
 // Repeater Swing utilities
 // ---------------------------------------------------------------------------
 
+// Target fields are nullable: a tab may be readable (request present) even when
+// the target host/port/scheme can't be auto-detected. Callers fall back to
+// explicit override parameters in that case.
 private data class RepeaterConnectionInfo(
     val request: String,
-    val hostname: String,
-    val port: Int,
-    val usesHttps: Boolean
+    val hostname: String?,
+    val port: Int?,
+    val usesHttps: Boolean?
 )
 
 private fun repeaterTabs(api: MontoyaApi): List<Pair<Int, String>> {
@@ -821,16 +874,21 @@ private fun repeaterTabConnectionInfo(tabIndex: Int, api: MontoyaApi): RepeaterC
         val targetUrl = findRepeaterTargetUrl(tabComp)
         val fromUrl = targetUrl?.let { parseRepeaterTargetUrl(it) }
 
-        val (hostname, port, https) = if (fromUrl != null) {
-            fromUrl
+        result = if (fromUrl != null) {
+            RepeaterConnectionInfo(requestText, fromUrl.first, fromUrl.second, fromUrl.third)
         } else {
-            // Priority 2: Host header for host/port, HTTPS checkbox for scheme
-            val fromHost = deriveTargetFromHostHeader(requestText) ?: return@runOnEdt
+            // Priority 2: Host header for host/port, HTTPS checkbox for scheme.
+            // Any of these may be null — the request is still returned so callers
+            // can supply explicit overrides.
+            val fromHost = deriveTargetFromHostHeader(requestText)
             val httpsFromCheckbox = findRepeaterHttpsState(tabComp)
-            Triple(fromHost.first, fromHost.second, httpsFromCheckbox ?: fromHost.third)
+            RepeaterConnectionInfo(
+                requestText,
+                fromHost?.first,
+                fromHost?.second,
+                httpsFromCheckbox ?: fromHost?.third
+            )
         }
-
-        result = RepeaterConnectionInfo(requestText, hostname, port, https)
     }
     return result
 }

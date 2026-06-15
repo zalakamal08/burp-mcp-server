@@ -41,10 +41,20 @@ This is the workhorse pattern for manual exploitation and fuzzing:
 Notes:
 - The raw request is a full HTTP message: `METHOD path HTTP/1.1\r\nHost: ...\r\n\r\nbody`.
   The server normalizes line endings, so `\n` is accepted, but keep the blank line
-  between headers and body.
-- **HTTPS and port are auto-detected** from the tab's target field / HTTPS toggle —
-  you do NOT specify scheme when sending a Repeater tab. This works even on
-  non-standard HTTPS ports (e.g. 8443).
+  between headers and body. This applies to `create_repeater_tab`,
+  `set_repeater_tab_request`, `send_to_intruder`, and the HTTP send tools.
+- **HTTPS and port are auto-detected** from the tab's target field / HTTPS toggle.
+  Detection is best-effort and can be wrong — e.g. a `Host` header with no port
+  defaults to `http:80` even when the API needs `https:443`. **If the target is
+  wrong, override it** on `send_repeater_tab_request` (and `get_repeater_tab`):
+  ```
+  send_repeater_tab_request(tabIndex: 0, targetHostname: "api.example.com", targetPort: 443, usesHttps: true)
+  ```
+  The override always wins over auto-detection. You do not need to mutate Burp's UI.
+- **Responses are truncated** to `maxResponseChars` (default 50000) so a huge body
+  (e.g. a CDN error page) cannot overflow the token limit. The status line and
+  headers are always preserved (they come first). Pass a larger `maxResponseChars`
+  if you need more of the body.
 - To compare every payload you've already sent in a tab, use the **send history**:
   ```
   list_repeater_tab_history(0)              → ["0: https://.../login", "1: https://.../login", ...]
