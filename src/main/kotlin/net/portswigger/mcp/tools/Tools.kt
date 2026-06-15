@@ -26,8 +26,10 @@ import java.awt.Container
 import java.awt.EventQueue
 import java.awt.KeyboardFocusManager
 import java.util.regex.Pattern
+import javax.swing.AbstractButton
 import javax.swing.JCheckBox
 import javax.swing.JComboBox
+import javax.swing.JLabel
 import javax.swing.JTabbedPane
 import javax.swing.JTextArea
 import javax.swing.JTextField
@@ -885,17 +887,22 @@ private fun repeaterTabConnectionInfo(tabIndex: Int, api: MontoyaApi): RepeaterC
         result = if (fromUrl != null) {
             RepeaterConnectionInfo(requestText, fromUrl.first, fromUrl.second, fromUrl.third)
         } else {
-            // Priority 2: Host header for host/port, HTTPS checkbox for scheme.
-            // Any of these may be null — the request is still returned so callers
-            // can supply explicit overrides.
+            // Priority 2: Host header for host/port; scheme from (in order):
+            //   1. an HTTPS/SSL/TLS checkbox (older Burp),
+            //   2. the request protocol line — HTTP/2 is always TLS, so "... HTTP/2" ⇒ https,
+            //   3. the Host-header port heuristic (443/8443 ⇒ https).
+            // Modern Burp has no HTTPS checkbox or URL text field (the target sits behind the
+            // "Target:" control), so the HTTP/2 signal is what saves the common case here.
+            // Any field may be null — the request is still returned so callers can override.
             val fromHost = deriveTargetFromHostHeader(requestText)
             val httpsFromCheckbox = findRepeaterHttpsState(tabComp)
-            RepeaterConnectionInfo(
-                requestText,
-                fromHost?.first,
-                fromHost?.second,
-                httpsFromCheckbox ?: fromHost?.third
-            )
+            val httpsFromProtocol = if (requestUsesHttp2(requestText)) true else null
+            val https = httpsFromCheckbox ?: httpsFromProtocol ?: fromHost?.third
+            // If we inferred HTTPS but the host header gave no explicit port, prefer 443 over 80.
+            val port = fromHost?.second?.let { p ->
+                if (https == true && p == 80 && !hostHeaderHasExplicitPort(requestText)) 443 else p
+            }
+            RepeaterConnectionInfo(requestText, fromHost?.first, port, https)
         }
     }
     return result
@@ -1054,18 +1061,49 @@ private fun findRepeaterHttpsState(container: Container): Boolean? {
     return null
 }
 
+// Looks for the tab's target URL anywhere in the component tree. Older Burp showed
+// it in a JTextField; modern Burp shows it as a "Target:" label/button. We therefore
+// scan JTextField, JLabel, and AbstractButton text for an http(s):// URL.
 private fun findRepeaterTargetUrl(container: Container): String? {
     val queue = ArrayDeque<Component>()
     queue.add(container)
     while (queue.isNotEmpty()) {
         val comp = queue.removeFirst()
-        if (comp is JTextField) {
-            val text = comp.text?.trim() ?: ""
-            if (text.startsWith("http://") || text.startsWith("https://")) return text
+        val text = when (comp) {
+            is JTextField -> comp.text
+            is AbstractButton -> comp.text
+            is JLabel -> comp.text
+            else -> null
+        }?.trim()
+        if (text != null) {
+            val url = extractUrl(text)
+            if (url != null) return url
         }
         if (comp is Container) comp.components.forEach { queue.add(it) }
     }
     return null
+}
+
+// Pulls the first http(s):// token out of a string (the "Target:" label may read
+// "Target: https://host" or wrap the URL in other text).
+private fun extractUrl(text: String): String? {
+    val idx = text.indexOf("https://").let { if (it >= 0) it else text.indexOf("http://") }
+    if (idx < 0) return null
+    return text.substring(idx).split(Regex("\\s"))[0].trim()
+}
+
+// True when the request's protocol line ends with HTTP/2 (HTTP/2 is always TLS in practice).
+private fun requestUsesHttp2(request: String): Boolean {
+    val firstLine = request.lineSequence().firstOrNull()?.trim() ?: return false
+    return firstLine.endsWith("HTTP/2", ignoreCase = true) ||
+           firstLine.endsWith("HTTP/2.0", ignoreCase = true)
+}
+
+private fun hostHeaderHasExplicitPort(request: String): Boolean {
+    val hostValue = request.lineSequence()
+        .firstOrNull { it.trim().startsWith("Host:", ignoreCase = true) }
+        ?.substringAfter(":")?.trim() ?: return false
+    return hostValue.substringAfterLast(':', "").toIntOrNull() != null
 }
 
 private fun parseRepeaterTargetUrl(url: String): Triple<String, Int, Boolean>? {

@@ -43,10 +43,11 @@ Notes:
   The server normalizes line endings, so `\n` is accepted, but keep the blank line
   between headers and body. This applies to `create_repeater_tab`,
   `set_repeater_tab_request`, `send_to_intruder`, and the HTTP send tools.
-- **HTTPS and port are auto-detected** from the tab's target field / HTTPS toggle.
-  Detection is best-effort and can be wrong — e.g. a `Host` header with no port
-  defaults to `http:80` even when the API needs `https:443`. **If the target is
-  wrong, override it** on `send_repeater_tab_request` (and `get_repeater_tab`):
+- **HTTPS and port are auto-detected** from the tab's target label, an HTTPS
+  toggle (older Burp), or — when neither is present — the request's protocol line
+  (`HTTP/2` ⇒ HTTPS, port upgraded to 443) and the `Host` header. Detection is
+  best-effort and can still be wrong. **If the target is wrong, override it** on
+  `send_repeater_tab_request` (and `get_repeater_tab`):
   ```
   send_repeater_tab_request(tabIndex: 0, targetHostname: "api.example.com", targetPort: 443, usesHttps: true)
   ```
