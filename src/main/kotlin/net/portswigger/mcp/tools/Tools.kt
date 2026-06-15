@@ -957,16 +957,65 @@ private fun setRepeaterTabRequestText(tabIndex: Int, request: String, api: Monto
     return success
 }
 
-// Finds the tab's "Send" button (the one that toggles to disabled while a request is in flight).
-private fun findRepeaterSendButton(container: Container): AbstractButton? {
+private fun stripHtml(s: String?): String = s?.replace(Regex("<[^>]*>"), "")?.trim() ?: ""
+
+private fun collectButtons(container: Container): List<AbstractButton> {
+    val buttons = mutableListOf<AbstractButton>()
     val queue = ArrayDeque<Component>()
     queue.add(container)
     while (queue.isNotEmpty()) {
         val comp = queue.removeFirst()
-        if (comp is AbstractButton && comp.text?.trim().equals("Send", ignoreCase = true)) return comp
+        if (comp is AbstractButton) buttons.add(comp)
         if (comp is Container) comp.components.forEach { queue.add(it) }
     }
+    return buttons
+}
+
+// Finds the Repeater "Send" button. Burp's text may be plain, HTML-wrapped, or carried
+// on the action/tooltip, so we try progressively looser matches. Returns null only if no
+// AbstractButton looks like Send (then describeButtons() reveals what's actually there).
+private fun findRepeaterSendButton(container: Container): AbstractButton? {
+    val buttons = collectButtons(container)
+    // 1. exact text "Send"
+    buttons.firstOrNull { stripHtml(it.text).equals("Send", ignoreCase = true) }?.let { return it }
+    // 2. action command or tooltip indicates Send
+    buttons.firstOrNull {
+        stripHtml(it.actionCommand).equals("Send", ignoreCase = true) ||
+        stripHtml(it.toolTipText).startsWith("Send", ignoreCase = true)
+    }?.let { return it }
+    // 3. text starts with "Send" but isn't a "Send to ..." context action
+    buttons.firstOrNull {
+        val t = stripHtml(it.text)
+        t.startsWith("Send", ignoreCase = true) && !t.startsWith("Send to", ignoreCase = true)
+    }?.let { return it }
     return null
+}
+
+// Inventory of every button in a container — used to diagnose Send-button detection failures.
+private fun describeButtons(container: Container): String {
+    val items = collectButtons(container).map {
+        "${it.javaClass.simpleName}[text='${stripHtml(it.text)}', tip='${stripHtml(it.toolTipText)}', " +
+        "cmd='${stripHtml(it.actionCommand)}', enabled=${it.isEnabled}]"
+    }
+    val abstractButtons = if (items.isEmpty()) "no AbstractButtons found" else items.joinToString(" | ")
+
+    // Also scan for custom (non-AbstractButton) components whose class name hints at a button/send
+    // control — Burp's themed Send button may be a bespoke component that AbstractButton scans miss.
+    val candidates = mutableListOf<String>()
+    val queue = ArrayDeque<Component>()
+    queue.add(container)
+    while (queue.isNotEmpty()) {
+        val comp = queue.removeFirst()
+        if (comp !is AbstractButton) {
+            val cls = comp.javaClass.simpleName
+            if (cls.contains("Send", ignoreCase = true) || cls.contains("Button", ignoreCase = true)) {
+                candidates.add(comp.javaClass.name)
+            }
+        }
+        if (comp is Container) comp.components.forEach { queue.add(it) }
+    }
+    val custom = if (candidates.isEmpty()) "none" else candidates.distinct().joinToString(", ")
+    return "AbstractButtons={$abstractButtons}; non-button send/button-like classes={$custom}"
 }
 
 // Sends a Repeater tab by clicking its real Send button, so the request goes through
@@ -988,6 +1037,7 @@ private fun sendRepeaterTabViaUi(tabIndex: Int, api: MontoyaApi, config: McpConf
     var clicked = false
     var sawSending = false
     var diag = "no tab/pane"
+    var buttonInventory: String? = null
     // Capture the Send button ONCE so the click target and the enabled-probe are always
     // the same component (avoids desync if more than one "Send"-labelled button exists).
     var sendButton: AbstractButton? = null
@@ -1006,7 +1056,11 @@ private fun sendRepeaterTabViaUi(tabIndex: Int, api: MontoyaApi, config: McpConf
 
         // The Send button is in the shared toolbar at the panel level, NOT inside the tab content.
         val sendBtn = findRepeaterSendButton(panel)
-        if (sendBtn == null) { diag = "Send button not found in Repeater panel"; return@runOnEdt }
+        if (sendBtn == null) {
+            diag = "Send button not found in Repeater panel"
+            buttonInventory = describeButtons(panel)  // capture what IS there for diagnosis
+            return@runOnEdt
+        }
         sendButton = sendBtn
         sendBtn.doClick()
         // Burp disables Send synchronously inside the click handler while the request is
@@ -1014,10 +1068,15 @@ private fun sendRepeaterTabViaUi(tabIndex: Int, api: MontoyaApi, config: McpConf
         // are still recognised as having started.
         if (!sendBtn.isEnabled) sawSending = true
         clicked = true
-        diag = "clicked (button='${sendBtn.text}'); baselineLen=${baseline?.length ?: 0} sawSendingAfterClick=$sawSending"
+        diag = "clicked (button='${stripHtml(sendBtn.text)}'); baselineLen=${baseline?.length ?: 0} sawSendingAfterClick=$sawSending"
     }
     debugLog(config, api, "UI send tab $tabIndex: $diag")
-    if (!clicked) return null
+    if (!clicked) {
+        // Log the button inventory unconditionally — this is the error path we need to diagnose,
+        // and it fires at most once per send attempt (not spam).
+        buttonInventory?.let { api.logging().logToOutput("MCP Repeater tab $tabIndex buttons: $it") }
+        return null
+    }
 
     // Poll off the EDT until the Send button completes its disabled→enabled cycle,
     // or the response text changes, or we time out.
