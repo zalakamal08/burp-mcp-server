@@ -15,6 +15,7 @@ class McpConfig(storage: PersistedObject, private val logging: Logging) {
     var port by storage.int(9876)
     var requireHttpRequestApproval by storage.boolean(false)
     var requireHistoryAccessApproval by storage.boolean(false)
+    var debugLogging by storage.boolean(false)
     private var disabledTools by storage.stringList("")
 
     fun isToolEnabled(toolName: String): Boolean = toolName !in getDisabledToolsList()

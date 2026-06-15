@@ -55,6 +55,13 @@ private fun truncateIfNeeded(serialized: String): String {
     }
 }
 
+// Writes a diagnostic line to Burp's extension Output, but only when the user has
+// enabled "Debug logging" in the MCP config tab. Use for verbose tracing that would
+// otherwise spam the Output (e.g. the Repeater Send-button path).
+private fun debugLog(config: McpConfig, api: MontoyaApi, message: String) {
+    if (config.debugLogging) api.logging().logToOutput("[MCP debug] $message")
+}
+
 // Normalizes any mix of \r\n, \r, or \n into proper HTTP CRLF line endings.
 // JSON transport can deliver line endings inconsistently; Burp needs real CRLF
 // to parse a raw HTTP request, so we normalize before handing requests off.
@@ -567,9 +574,14 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
         "uses a direct engine send instead (response returned here but NOT shown in the tab). " +
         "Use list_repeater_tabs to discover tab indices."
     ) {
+        debugLog(config, api, "send_repeater_tab_request: tab=$tabIndex inlineRequest=${request != null} " +
+            "overrides(host=$targetHostname port=$targetPort https=$usesHttps)")
+
         // Stage the new request in the tab first (visible to the user, and what Send will dispatch).
-        if (request != null && !setRepeaterTabRequestText(tabIndex, request, api)) {
-            return@mcpTool "Could not update Repeater tab $tabIndex before sending. Verify the index is valid."
+        if (request != null) {
+            val staged = setRepeaterTabRequestText(tabIndex, request, api)
+            debugLog(config, api, "staged inline request into tab $tabIndex: success=$staged")
+            if (!staged) return@mcpTool "Could not update Repeater tab $tabIndex before sending. Verify the index is valid."
         }
 
         val info = repeaterTabConnectionInfo(tabIndex, api)
@@ -579,6 +591,8 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
         val host = targetHostname ?: info.hostname
         val port = targetPort ?: info.port
         val https = usesHttps ?: info.usesHttps ?: false
+        debugLog(config, api, "detected target: host=${info.hostname} port=${info.port} https=${info.usesHttps}; " +
+            "resolved host=$host port=$port https=$https overrideTarget=$overrideTarget")
 
         // Scope/approval check using the best-effort target (skipped only if undetectable).
         if (host != null && port != null) {
@@ -589,14 +603,17 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
                 api.logging().logToOutput("MCP Repeater tab $tabIndex request denied: $host:$port")
                 return@mcpTool "Send HTTP request denied by Burp Suite"
             }
+        } else {
+            debugLog(config, api, "permission check skipped (target host/port undetectable)")
         }
 
         // Preferred path: drive the tab's real Send button (response shows in tab + saved to history).
         // Only when not redirecting to a different target — the UI sends to the tab's own target.
         if (!overrideTarget) {
             api.logging().logToOutput("MCP sending Repeater tab $tabIndex via Send button")
-            val uiResponse = sendRepeaterTabViaUi(tabIndex, api)
+            val uiResponse = sendRepeaterTabViaUi(tabIndex, api, config = config)
             if (uiResponse != null) {
+                debugLog(config, api, "UI send returned ${uiResponse.length} chars; not falling back")
                 return@mcpTool truncateResponse(uiResponse, maxResponseChars)
             }
             api.logging().logToOutput("MCP Repeater tab $tabIndex: Send button unavailable, using direct engine send")
@@ -958,7 +975,7 @@ private fun findRepeaterSendButton(container: Container): AbstractButton? {
 //   - null  → the Send button could not be found/clicked (caller may fall back to a direct send)
 //   - non-null String → the request was dispatched; the response text, or a note if it
 //     completed/timed out without readable response text (so the caller does NOT double-send).
-private fun sendRepeaterTabViaUi(tabIndex: Int, api: MontoyaApi, timeoutMs: Long = 20000): String? {
+private fun sendRepeaterTabViaUi(tabIndex: Int, api: MontoyaApi, config: McpConfig, timeoutMs: Long = 20000): String? {
     val frame = api.userInterface().swingUtils().suiteFrame()
 
     fun tabContainer(): Container? {
@@ -970,13 +987,16 @@ private fun sendRepeaterTabViaUi(tabIndex: Int, api: MontoyaApi, timeoutMs: Long
     var baseline: String? = null
     var clicked = false
     var sawSending = false
+    var diag = "no tab/pane"
     // Capture the Send button ONCE so the click target and the enabled-probe are always
     // the same component (avoids desync if more than one "Send"-labelled button exists).
     var sendButton: AbstractButton? = null
     runOnEdt {
-        val tabComp = tabContainer() ?: return@runOnEdt
+        val tabComp = tabContainer()
+        if (tabComp == null) { diag = "tab container not found"; return@runOnEdt }
         baseline = findRepeaterResponseArea(tabComp)?.text ?: ""
-        val sendBtn = findRepeaterSendButton(tabComp) ?: return@runOnEdt
+        val sendBtn = findRepeaterSendButton(tabComp)
+        if (sendBtn == null) { diag = "Send button not found in tab"; return@runOnEdt }
         sendButton = sendBtn
         sendBtn.doClick()
         // Burp disables Send synchronously inside the click handler while the request is
@@ -984,14 +1004,19 @@ private fun sendRepeaterTabViaUi(tabIndex: Int, api: MontoyaApi, timeoutMs: Long
         // are still recognised as having started.
         if (!sendBtn.isEnabled) sawSending = true
         clicked = true
+        diag = "clicked; baselineLen=${baseline?.length ?: 0} sawSendingAfterClick=$sawSending"
     }
+    debugLog(config, api, "UI send tab $tabIndex: $diag")
     if (!clicked) return null
 
     // Poll off the EDT until the Send button completes its disabled→enabled cycle,
     // or the response text changes, or we time out.
     val deadline = System.currentTimeMillis() + timeoutMs
+    var polls = 0
+    var completionReason = "timeout"
     while (System.currentTimeMillis() < deadline) {
         Thread.sleep(100)
+        polls++
         var done = false
         runOnEdt {
             val tabComp = tabContainer() ?: return@runOnEdt
@@ -999,7 +1024,10 @@ private fun sendRepeaterTabViaUi(tabIndex: Int, api: MontoyaApi, timeoutMs: Long
             if (!sendEnabled) sawSending = true
             val current = findRepeaterResponseArea(tabComp)?.text
             val changed = !current.isNullOrBlank() && current != baseline
-            if ((sawSending && sendEnabled) || changed) done = true
+            when {
+                sawSending && sendEnabled -> { done = true; completionReason = "send-button re-enabled" }
+                changed -> { done = true; completionReason = "response changed" }
+            }
         }
         if (done) break
     }
@@ -1011,6 +1039,8 @@ private fun sendRepeaterTabViaUi(tabIndex: Int, api: MontoyaApi, timeoutMs: Long
         val tabComp = tabContainer() ?: return@runOnEdt
         finalResp = findRepeaterResponseArea(tabComp)?.text?.takeIf { it.isNotBlank() }
     }
+    debugLog(config, api, "UI send tab $tabIndex: completed via '$completionReason' after $polls polls; " +
+        "responseLen=${finalResp?.length ?: 0}")
     return finalResp ?: "(request sent through Repeater; response not captured from the tab — check the tab UI)"
 }
 

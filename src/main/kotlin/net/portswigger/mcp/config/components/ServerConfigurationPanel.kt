@@ -63,6 +63,24 @@ class ServerConfigurationPanel(
         add(formPanel)
         add(createVerticalStrut(Design.Spacing.MD))
 
+        // Debug logging toggle — when on, tools write verbose diagnostics to the
+        // extension's Output tab. Can be toggled at any time (even while running).
+        val debugCheckbox = object : JCheckBox("Debug logging (Output tab)", config.debugLogging) {
+            init { updateColors() }
+            override fun updateUI() { super.updateUI(); updateColors() }
+            private fun updateColors() {
+                isOpaque = false
+                font = Design.Typography.bodyLarge
+                foreground = Design.Colors.onSurface
+            }
+        }.apply {
+            alignmentX = LEFT_ALIGNMENT
+            toolTipText = "Logs verbose diagnostics (e.g. how Repeater sends are routed) to the extension Output tab."
+            addActionListener { config.debugLogging = isSelected }
+        }
+        add(debugCheckbox)
+        add(createVerticalStrut(Design.Spacing.MD))
+
         add(validationErrorLabel)
     }
 
