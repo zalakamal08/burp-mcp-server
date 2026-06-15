@@ -992,11 +992,21 @@ private fun sendRepeaterTabViaUi(tabIndex: Int, api: MontoyaApi, config: McpConf
     // the same component (avoids desync if more than one "Send"-labelled button exists).
     var sendButton: AbstractButton? = null
     runOnEdt {
-        val tabComp = tabContainer()
-        if (tabComp == null) { diag = "tab container not found"; return@runOnEdt }
+        val panel = findRepeaterPanel(frame)
+        if (panel == null) { diag = "Repeater panel not found"; return@runOnEdt }
+        val pane = findFirstTabbedPane(panel)
+        if (pane == null) { diag = "inner tabbed pane not found"; return@runOnEdt }
+        if (tabIndex < 0 || tabIndex >= pane.tabCount) { diag = "tab index out of range (count=${pane.tabCount})"; return@runOnEdt }
+
+        // Select the target tab so the SHARED Send toolbar acts on it.
+        pane.selectedIndex = tabIndex
+        val tabComp = pane.getComponentAt(tabIndex) as? Container
+        if (tabComp == null) { diag = "tab content container not found"; return@runOnEdt }
         baseline = findRepeaterResponseArea(tabComp)?.text ?: ""
-        val sendBtn = findRepeaterSendButton(tabComp)
-        if (sendBtn == null) { diag = "Send button not found in tab"; return@runOnEdt }
+
+        // The Send button is in the shared toolbar at the panel level, NOT inside the tab content.
+        val sendBtn = findRepeaterSendButton(panel)
+        if (sendBtn == null) { diag = "Send button not found in Repeater panel"; return@runOnEdt }
         sendButton = sendBtn
         sendBtn.doClick()
         // Burp disables Send synchronously inside the click handler while the request is
@@ -1004,7 +1014,7 @@ private fun sendRepeaterTabViaUi(tabIndex: Int, api: MontoyaApi, config: McpConf
         // are still recognised as having started.
         if (!sendBtn.isEnabled) sawSending = true
         clicked = true
-        diag = "clicked; baselineLen=${baseline?.length ?: 0} sawSendingAfterClick=$sawSending"
+        diag = "clicked (button='${sendBtn.text}'); baselineLen=${baseline?.length ?: 0} sawSendingAfterClick=$sawSending"
     }
     debugLog(config, api, "UI send tab $tabIndex: $diag")
     if (!clicked) return null
@@ -1119,11 +1129,19 @@ private fun repeaterTabHistoryItem(tabIndex: Int, historyIndex: Int, api: Montoy
     return result
 }
 
-private fun findRepeaterInnerTabbedPane(container: Container): JTabbedPane? {
+// Returns the top-level Repeater panel — the container that holds BOTH the shared
+// Send/Cancel/◄►/history toolbar AND the inner tabbed pane of request tabs. The Send
+// toolbar lives here, not inside an individual tab's content, so button lookups must
+// search from this panel rather than from a single tab's component.
+private fun findRepeaterPanel(container: Container): Container? {
     val mainPane = findTabbedPaneContaining(container, "Repeater") ?: return null
     val idx = (0 until mainPane.tabCount)
         .firstOrNull { mainPane.getTitleAt(it).equals("Repeater", ignoreCase = true) } ?: return null
-    val repeaterPanel = mainPane.getComponentAt(idx) as? Container ?: return null
+    return mainPane.getComponentAt(idx) as? Container
+}
+
+private fun findRepeaterInnerTabbedPane(container: Container): JTabbedPane? {
+    val repeaterPanel = findRepeaterPanel(container) ?: return null
     return findFirstTabbedPane(repeaterPanel)
 }
 
