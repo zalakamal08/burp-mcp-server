@@ -28,7 +28,6 @@ import java.awt.KeyboardFocusManager
 import java.util.regex.Pattern
 import javax.swing.AbstractButton
 import javax.swing.JCheckBox
-import javax.swing.JComboBox
 import javax.swing.JLabel
 import javax.swing.JTabbedPane
 import javax.swing.JTextArea
@@ -525,11 +524,12 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
     }
 
     if (enabled("get_repeater_tab")) mcpTool<GetRepeaterTab>(
-        "Returns the request currently loaded in a Repeater tab, the resolved target, and the response shown in the " +
-        "tab's response panel. The response reflects the most recent send through the tab (a normal " +
-        "send_repeater_tab_request updates it, since that clicks the tab's Send button). It is stale/empty only if " +
-        "you used a target-override (direct) send. Target auto-detected; override with targetHostname/targetPort/usesHttps. " +
-        "Response truncated to maxResponseChars (default 50000). Use list_repeater_tabs to discover tab indices."
+        "Returns the request currently loaded in a Repeater tab and its resolved target (host/port/HTTPS, auto-detected). " +
+        "Use this to read a request the user set up, then send it (optionally modified) with send_repeater_tab_request. " +
+        "Also returns the response currently shown in the tab's panel, which reflects the user's last MANUAL send in " +
+        "Burp (agent sends do not render there — Burp's API has no way to push a response into a tab). " +
+        "Override detection with targetHostname/targetPort/usesHttps. Truncated to maxResponseChars (default 50000). " +
+        "Use list_repeater_tabs to discover tab indices."
     ) {
         val info = repeaterTabConnectionInfo(tabIndex, api)
             ?: return@mcpTool "Could not read Repeater tab $tabIndex. Verify the index is valid and the tab contains a request."
@@ -543,121 +543,55 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
             "(target could not be auto-detected — pass targetHostname/targetPort/usesHttps when sending)"
         }
 
-        val responseText = repeaterTabResponseText(tabIndex, api) ?: "(no response yet — send the request first)"
+        val responseText = repeaterTabResponseText(tabIndex, api) ?: "(no response in the tab's panel)"
         buildString {
             appendLine("=== TARGET ===")
             appendLine(targetLine)
             appendLine()
             appendLine("=== REQUEST ===")
             appendLine(info.request)
-            appendLine("=== RESPONSE ===")
+            appendLine("=== RESPONSE (tab panel — user's last manual send) ===")
             append(truncateResponse(responseText, maxResponseChars))
         }
     }
 
-    if (enabled("set_repeater_tab_request")) mcpTool<SetRepeaterTabRequest>(
-        "Replaces the raw HTTP request text in the specified Repeater tab WITHOUT sending it — use this to stage " +
-        "a request for the user to review. To modify and send in one step, pass 'request' to send_repeater_tab_request instead. " +
-        "Use list_repeater_tabs to discover valid tab indices."
-    ) {
-        if (setRepeaterTabRequestText(tabIndex, request, api)) "Request updated in Repeater tab $tabIndex"
-        else "Could not update Repeater tab $tabIndex. Verify the index is valid."
-    }
-
     if (enabled("send_repeater_tab_request")) mcpTool<SendRepeaterTabRequest>(
-        "Sends a Repeater tab's request the way a pentester would: it clicks the tab's Send button, so the request " +
-        "goes through Repeater, the response appears in the tab, and the send is saved to the tab's history. " +
-        "Pass the optional 'request' field to replace the tab's request text before sending — one call modifies and " +
-        "sends (ideal for fuzzing, e.g. change /user/1 to /user/2). Omit it to send the request already in the tab. " +
-        "The response is also returned here directly. Large responses are truncated to maxResponseChars (default 50000). " +
-        "To send to a DIFFERENT host than the tab is configured for, pass targetHostname/targetPort/usesHttps — that " +
-        "uses a direct engine send instead (response returned here but NOT shown in the tab). " +
-        "Use list_repeater_tabs to discover tab indices."
+        "Sends a Repeater tab's request through Burp's HTTP engine and returns the response. " +
+        "The target (host/port/HTTPS) is auto-detected from the tab; pass the optional 'request' field to send a " +
+        "MODIFIED request instead of the one in the tab (ideal for fuzzing, e.g. change /user/1 to /user/2). " +
+        "Override the target with targetHostname/targetPort/usesHttps if needed. " +
+        "Large responses are truncated to maxResponseChars (default 50000). " +
+        "Note: the response is returned here; it does not render inside the Repeater tab (Burp's API has no way to " +
+        "push a response into a tab). The request is visible in Burp's Logger. Use list_repeater_tabs to find indices."
     ) {
-        debugLog(config, api, "send_repeater_tab_request: tab=$tabIndex inlineRequest=${request != null} " +
-            "overrides(host=$targetHostname port=$targetPort https=$usesHttps)")
-
-        // Stage the new request in the tab first (visible to the user, and what Send will dispatch).
-        if (request != null) {
-            val staged = setRepeaterTabRequestText(tabIndex, request, api)
-            debugLog(config, api, "staged inline request into tab $tabIndex: success=$staged")
-            if (!staged) return@mcpTool "Could not update Repeater tab $tabIndex before sending. Verify the index is valid."
-        }
-
         val info = repeaterTabConnectionInfo(tabIndex, api)
             ?: return@mcpTool "Could not read Repeater tab $tabIndex. Verify the index is valid and the tab contains a request."
 
-        val overrideTarget = targetHostname != null || targetPort != null || usesHttps != null
+        val requestToSend = request ?: info.request
         val host = targetHostname ?: info.hostname
         val port = targetPort ?: info.port
         val https = usesHttps ?: info.usesHttps ?: false
-        debugLog(config, api, "detected target: host=${info.hostname} port=${info.port} https=${info.usesHttps}; " +
-            "resolved host=$host port=$port https=$https overrideTarget=$overrideTarget")
+        debugLog(config, api, "send_repeater_tab_request: tab=$tabIndex inlineRequest=${request != null} " +
+            "resolved host=$host port=$port https=$https")
 
-        // Scope/approval check using the best-effort target (skipped only if undetectable).
-        if (host != null && port != null) {
-            val allowed = runBlocking {
-                HttpRequestSecurity.checkHttpRequestPermission(host, port, config, info.request, api)
-            }
-            if (!allowed) {
-                api.logging().logToOutput("MCP Repeater tab $tabIndex request denied: $host:$port")
-                return@mcpTool "Send HTTP request denied by Burp Suite"
-            }
-        } else {
-            debugLog(config, api, "permission check skipped (target host/port undetectable)")
-        }
-
-        // Preferred path: drive the tab's real Send button (response shows in tab + saved to history).
-        // Only when not redirecting to a different target — the UI sends to the tab's own target.
-        if (!overrideTarget) {
-            api.logging().logToOutput("MCP sending Repeater tab $tabIndex via Send button")
-            val uiResponse = sendRepeaterTabViaUi(tabIndex, api, config = config)
-            if (uiResponse != null) {
-                debugLog(config, api, "UI send returned ${uiResponse.length} chars; not falling back")
-                return@mcpTool truncateResponse(uiResponse, maxResponseChars)
-            }
-            api.logging().logToOutput("MCP Repeater tab $tabIndex: Send button unavailable, using direct engine send")
-        }
-
-        // Fallback / override path: send directly through Burp's HTTP engine.
         if (host == null || port == null) {
             return@mcpTool "Could not determine the target for Repeater tab $tabIndex. " +
                 "Pass targetHostname, targetPort, and usesHttps explicitly."
         }
-        api.logging().logToOutput("MCP sending Repeater tab $tabIndex (direct): ${if (https) "https" else "http"}://$host:$port")
-        val fixedRequest = normalizeHttpLineEndings(info.request)
+
+        val allowed = runBlocking {
+            HttpRequestSecurity.checkHttpRequestPermission(host, port, config, requestToSend, api)
+        }
+        if (!allowed) {
+            api.logging().logToOutput("MCP Repeater tab $tabIndex request denied: $host:$port")
+            return@mcpTool "Send HTTP request denied by Burp Suite"
+        }
+
+        api.logging().logToOutput("MCP sending Repeater tab $tabIndex: ${if (https) "https" else "http"}://$host:$port")
+        val fixedRequest = normalizeHttpLineEndings(requestToSend)
         val httpRequest = HttpRequest.httpRequest(HttpService.httpService(host, port, https), fixedRequest)
         val response = api.http().sendRequest(httpRequest)
         truncateResponse(response?.toString() ?: "<no response>", maxResponseChars)
-    }
-
-    if (enabled("list_repeater_tab_history")) mcpTool<ListRepeaterTabHistory>(
-        "Lists all entries in a Repeater tab's send history — the same list shown by the navigation dropdown " +
-        "next to the < > arrows. Each entry shows its 0-based index and the URL that was requested. " +
-        "Use get_repeater_tab_history_item to read the full request and response for any entry."
-    ) {
-        val items = repeaterTabHistory(tabIndex, api)
-        when {
-            items == null -> "History dropdown not found in Repeater tab $tabIndex — this may not be supported in your Burp version."
-            items.isEmpty() -> "No history entries in Repeater tab $tabIndex yet."
-            else -> items.mapIndexed { i, entry -> "$i: $entry" }.joinToString("\n")
-        }
-    }
-
-    if (enabled("get_repeater_tab_history_item")) mcpTool<GetRepeaterTabHistoryItem>(
-        "Returns the full request and response for a specific history entry in a Repeater tab. " +
-        "Use list_repeater_tab_history first to discover valid indices. " +
-        "The tab is briefly navigated to that history entry then restored to its original position."
-    ) {
-        val entry = repeaterTabHistoryItem(tabIndex, historyIndex, api)
-            ?: return@mcpTool "Could not read history item $historyIndex from Repeater tab $tabIndex. " +
-                              "Use list_repeater_tab_history to verify the index is valid."
-        buildString {
-            appendLine("=== REQUEST ===")
-            appendLine(entry.first)
-            appendLine("=== RESPONSE ===")
-            append(entry.second ?: "(no response recorded for this history entry)")
-        }
     }
 
     if (enabled("get_active_editor_contents")) mcpTool("get_active_editor_contents", "Outputs the contents of the user's active message editor") {
@@ -840,9 +774,6 @@ data class GetRepeaterTab(
 )
 
 @Serializable
-data class SetRepeaterTabRequest(val tabIndex: Int, val request: String)
-
-@Serializable
 data class SendRepeaterTabRequest(
     val tabIndex: Int,
     val request: String? = null,
@@ -851,12 +782,6 @@ data class SendRepeaterTabRequest(
     val usesHttps: Boolean? = null,
     val maxResponseChars: Int = 50000
 )
-
-@Serializable
-data class ListRepeaterTabHistory(val tabIndex: Int)
-
-@Serializable
-data class GetRepeaterTabHistoryItem(val tabIndex: Int, val historyIndex: Int)
 
 @Serializable
 data class ExtractFromResponse(
@@ -939,180 +864,6 @@ private fun repeaterTabConnectionInfo(tabIndex: Int, api: MontoyaApi): RepeaterC
     return result
 }
 
-// Writes raw request text into a Repeater tab's request editor. Shared by
-// set_repeater_tab_request and the inline-request path of send_repeater_tab_request.
-// Returns true on success. Line endings are NOT normalized here so the editor shows
-// exactly what was supplied; the send path normalizes when issuing the request.
-private fun setRepeaterTabRequestText(tabIndex: Int, request: String, api: MontoyaApi): Boolean {
-    val frame = api.userInterface().swingUtils().suiteFrame()
-    var success = false
-    runOnEdt {
-        val pane = findRepeaterInnerTabbedPane(frame) ?: return@runOnEdt
-        if (tabIndex < 0 || tabIndex >= pane.tabCount) return@runOnEdt
-        val tabComp = pane.getComponentAt(tabIndex) as? Container ?: return@runOnEdt
-        val area = findRepeaterRequestArea(tabComp) ?: return@runOnEdt
-        area.text = request
-        success = true
-    }
-    return success
-}
-
-private fun stripHtml(s: String?): String = s?.replace(Regex("<[^>]*>"), "")?.trim() ?: ""
-
-private fun collectButtons(container: Container): List<AbstractButton> {
-    val buttons = mutableListOf<AbstractButton>()
-    val queue = ArrayDeque<Component>()
-    queue.add(container)
-    while (queue.isNotEmpty()) {
-        val comp = queue.removeFirst()
-        if (comp is AbstractButton) buttons.add(comp)
-        if (comp is Container) comp.components.forEach { queue.add(it) }
-    }
-    return buttons
-}
-
-// Finds the Repeater "Send" button. Burp's text may be plain, HTML-wrapped, or carried
-// on the action/tooltip, so we try progressively looser matches. Returns null only if no
-// AbstractButton looks like Send (then describeButtons() reveals what's actually there).
-private fun findRepeaterSendButton(container: Container): AbstractButton? {
-    val buttons = collectButtons(container)
-    // 1. exact text "Send"
-    buttons.firstOrNull { stripHtml(it.text).equals("Send", ignoreCase = true) }?.let { return it }
-    // 2. action command or tooltip indicates Send
-    buttons.firstOrNull {
-        stripHtml(it.actionCommand).equals("Send", ignoreCase = true) ||
-        stripHtml(it.toolTipText).startsWith("Send", ignoreCase = true)
-    }?.let { return it }
-    // 3. text starts with "Send" but isn't a "Send to ..." context action
-    buttons.firstOrNull {
-        val t = stripHtml(it.text)
-        t.startsWith("Send", ignoreCase = true) && !t.startsWith("Send to", ignoreCase = true)
-    }?.let { return it }
-    return null
-}
-
-// Inventory of every button in a container — used to diagnose Send-button detection failures.
-private fun describeButtons(container: Container): String {
-    val items = collectButtons(container).map {
-        "${it.javaClass.simpleName}[text='${stripHtml(it.text)}', tip='${stripHtml(it.toolTipText)}', " +
-        "cmd='${stripHtml(it.actionCommand)}', enabled=${it.isEnabled}]"
-    }
-    val abstractButtons = if (items.isEmpty()) "no AbstractButtons found" else items.joinToString(" | ")
-
-    // Also scan for custom (non-AbstractButton) components whose class name hints at a button/send
-    // control — Burp's themed Send button may be a bespoke component that AbstractButton scans miss.
-    val candidates = mutableListOf<String>()
-    val queue = ArrayDeque<Component>()
-    queue.add(container)
-    while (queue.isNotEmpty()) {
-        val comp = queue.removeFirst()
-        if (comp !is AbstractButton) {
-            val cls = comp.javaClass.simpleName
-            if (cls.contains("Send", ignoreCase = true) || cls.contains("Button", ignoreCase = true)) {
-                candidates.add(comp.javaClass.name)
-            }
-        }
-        if (comp is Container) comp.components.forEach { queue.add(it) }
-    }
-    val custom = if (candidates.isEmpty()) "none" else candidates.distinct().joinToString(", ")
-    return "AbstractButtons={$abstractButtons}; non-button send/button-like classes={$custom}"
-}
-
-// Sends a Repeater tab by clicking its real Send button, so the request goes through
-// Repeater (response appears in the tab and is saved to the tab's history), then waits
-// for the response and returns it. Returns:
-//   - null  → the Send button could not be found/clicked (caller may fall back to a direct send)
-//   - non-null String → the request was dispatched; the response text, or a note if it
-//     completed/timed out without readable response text (so the caller does NOT double-send).
-private fun sendRepeaterTabViaUi(tabIndex: Int, api: MontoyaApi, config: McpConfig, timeoutMs: Long = 20000): String? {
-    val frame = api.userInterface().swingUtils().suiteFrame()
-
-    fun tabContainer(): Container? {
-        val pane = findRepeaterInnerTabbedPane(frame) ?: return null
-        if (tabIndex < 0 || tabIndex >= pane.tabCount) return null
-        return pane.getComponentAt(tabIndex) as? Container
-    }
-
-    var baseline: String? = null
-    var clicked = false
-    var sawSending = false
-    var diag = "no tab/pane"
-    var buttonInventory: String? = null
-    // Capture the Send button ONCE so the click target and the enabled-probe are always
-    // the same component (avoids desync if more than one "Send"-labelled button exists).
-    var sendButton: AbstractButton? = null
-    runOnEdt {
-        val panel = findRepeaterPanel(frame)
-        if (panel == null) { diag = "Repeater panel not found"; return@runOnEdt }
-        val pane = findFirstTabbedPane(panel)
-        if (pane == null) { diag = "inner tabbed pane not found"; return@runOnEdt }
-        if (tabIndex < 0 || tabIndex >= pane.tabCount) { diag = "tab index out of range (count=${pane.tabCount})"; return@runOnEdt }
-
-        // Select the target tab so the SHARED Send toolbar acts on it.
-        pane.selectedIndex = tabIndex
-        val tabComp = pane.getComponentAt(tabIndex) as? Container
-        if (tabComp == null) { diag = "tab content container not found"; return@runOnEdt }
-        baseline = findRepeaterResponseArea(tabComp)?.text ?: ""
-
-        // The Send button is in the shared toolbar at the panel level, NOT inside the tab content.
-        val sendBtn = findRepeaterSendButton(panel)
-        if (sendBtn == null) {
-            diag = "Send button not found in Repeater panel"
-            buttonInventory = describeButtons(panel)  // capture what IS there for diagnosis
-            return@runOnEdt
-        }
-        sendButton = sendBtn
-        sendBtn.doClick()
-        // Burp disables Send synchronously inside the click handler while the request is
-        // in flight; capture that here so fast sends (that re-enable before our first poll)
-        // are still recognised as having started.
-        if (!sendBtn.isEnabled) sawSending = true
-        clicked = true
-        diag = "clicked (button='${stripHtml(sendBtn.text)}'); baselineLen=${baseline?.length ?: 0} sawSendingAfterClick=$sawSending"
-    }
-    debugLog(config, api, "UI send tab $tabIndex: $diag")
-    if (!clicked) {
-        // Log the button inventory unconditionally — this is the error path we need to diagnose,
-        // and it fires at most once per send attempt (not spam).
-        buttonInventory?.let { api.logging().logToOutput("MCP Repeater tab $tabIndex buttons: $it") }
-        return null
-    }
-
-    // Poll off the EDT until the Send button completes its disabled→enabled cycle,
-    // or the response text changes, or we time out.
-    val deadline = System.currentTimeMillis() + timeoutMs
-    var polls = 0
-    var completionReason = "timeout"
-    while (System.currentTimeMillis() < deadline) {
-        Thread.sleep(100)
-        polls++
-        var done = false
-        runOnEdt {
-            val tabComp = tabContainer() ?: return@runOnEdt
-            val sendEnabled = sendButton?.isEnabled ?: true
-            if (!sendEnabled) sawSending = true
-            val current = findRepeaterResponseArea(tabComp)?.text
-            val changed = !current.isNullOrBlank() && current != baseline
-            when {
-                sawSending && sendEnabled -> { done = true; completionReason = "send-button re-enabled" }
-                changed -> { done = true; completionReason = "response changed" }
-            }
-        }
-        if (done) break
-    }
-
-    // Let the response settle, then read it.
-    Thread.sleep(100)
-    var finalResp: String? = null
-    runOnEdt {
-        val tabComp = tabContainer() ?: return@runOnEdt
-        finalResp = findRepeaterResponseArea(tabComp)?.text?.takeIf { it.isNotBlank() }
-    }
-    debugLog(config, api, "UI send tab $tabIndex: completed via '$completionReason' after $polls polls; " +
-        "responseLen=${finalResp?.length ?: 0}")
-    return finalResp ?: "(request sent through Repeater; response not captured from the tab — check the tab UI)"
-}
-
 private fun repeaterTabResponseText(tabIndex: Int, api: MontoyaApi): String? {
     val frame = api.userInterface().swingUtils().suiteFrame()
     var result: String? = null
@@ -1125,73 +876,8 @@ private fun repeaterTabResponseText(tabIndex: Int, api: MontoyaApi): String? {
     return result
 }
 
-// Finds the history navigation JComboBox in a Repeater tab (the dropdown beside the < > arrows).
-// A Repeater tab contains several combo boxes (view selectors, inspector, etc.), so we cannot
-// just take the first non-empty one. The history dropdown's entries are request URLs, so we
-// pick the combo box with the most URL-like items (containing "://"). If none qualify we return
-// null rather than risk mutating an unrelated control (e.g. the response view selector).
-private fun findRepeaterHistoryComboBox(container: Container): JComboBox<*>? {
-    val queue = ArrayDeque<Component>()
-    queue.add(container)
-    var best: JComboBox<*>? = null
-    var bestScore = 0
-    while (queue.isNotEmpty()) {
-        val comp = queue.removeFirst()
-        if (comp is JComboBox<*> && comp.itemCount > 0) {
-            val urlItems = (0 until comp.itemCount).count { i ->
-                comp.getItemAt(i)?.toString()?.contains("://") == true
-            }
-            if (urlItems > bestScore) {
-                bestScore = urlItems
-                best = comp
-            }
-        }
-        if (comp is Container) comp.components.forEach { queue.add(it) }
-    }
-    return best
-}
-
-private fun repeaterTabHistory(tabIndex: Int, api: MontoyaApi): List<String>? {
-    val frame = api.userInterface().swingUtils().suiteFrame()
-    var result: List<String>? = null
-    runOnEdt {
-        val pane = findRepeaterInnerTabbedPane(frame) ?: return@runOnEdt
-        if (tabIndex < 0 || tabIndex >= pane.tabCount) return@runOnEdt
-        val tabComp = pane.getComponentAt(tabIndex) as? Container ?: return@runOnEdt
-        val combo = findRepeaterHistoryComboBox(tabComp) ?: return@runOnEdt
-        result = (0 until combo.itemCount).map { combo.getItemAt(it)?.toString() ?: "(entry $it)" }
-    }
-    return result
-}
-
-private fun repeaterTabHistoryItem(tabIndex: Int, historyIndex: Int, api: MontoyaApi): Pair<String, String?>? {
-    val frame = api.userInterface().swingUtils().suiteFrame()
-    var result: Pair<String, String?>? = null
-    runOnEdt {
-        val pane = findRepeaterInnerTabbedPane(frame) ?: return@runOnEdt
-        if (tabIndex < 0 || tabIndex >= pane.tabCount) return@runOnEdt
-        val tabComp = pane.getComponentAt(tabIndex) as? Container ?: return@runOnEdt
-        val combo = findRepeaterHistoryComboBox(tabComp) ?: return@runOnEdt
-        if (historyIndex < 0 || historyIndex >= combo.itemCount) return@runOnEdt
-        val originalIndex = combo.selectedIndex
-        try {
-            combo.selectedIndex = historyIndex
-            tabComp.validate()
-            val request = findRepeaterRequestArea(tabComp)?.text ?: return@runOnEdt
-            val response = findRepeaterResponseArea(tabComp)?.text?.takeIf { it.isNotBlank() }
-            result = request to response
-        } finally {
-            combo.selectedIndex = originalIndex
-            tabComp.validate()
-        }
-    }
-    return result
-}
-
-// Returns the top-level Repeater panel — the container that holds BOTH the shared
-// Send/Cancel/◄►/history toolbar AND the inner tabbed pane of request tabs. The Send
-// toolbar lives here, not inside an individual tab's content, so button lookups must
-// search from this panel rather than from a single tab's component.
+// Returns the top-level Repeater panel — the container that holds the inner tabbed pane
+// of request tabs. (Reading tab content works from here; we no longer drive the toolbar.)
 private fun findRepeaterPanel(container: Container): Container? {
     val mainPane = findTabbedPaneContaining(container, "Repeater") ?: return null
     val idx = (0 until mainPane.tabCount)

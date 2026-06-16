@@ -16,11 +16,11 @@ All tools are prefixed `mcp__burp__` in Claude Code. Tool names below omit the p
 
 ## Golden rules (read first)
 
-1. **Prefer one combined call over two.** Use `get_repeater_tab` (returns request **and** response) instead of separate request/response calls. There is intentionally no `get_repeater_tab_request`/`get_repeater_tab_response` — the combined tool covers both.
+1. **Read, then send.** Use `get_repeater_tab` to read a tab's request + target in one call, then `send_repeater_tab_request` (optionally with a modified `request`) to send it.
 2. **Never dump full history when you can filter.** Use `search_proxy_history` (filter by status/method/content-type/body keyword) or `get_proxy_http_history_regex` instead of paging through `get_proxy_http_history`. This saves enormous token volume.
 3. **Always paginate.** History/site-map tools take `count` and `offset`. Start with a small `count` (e.g. 20) and page with `offset` only if needed.
 4. **Extract, don't re-read.** When you only need a token/CSRF value/redirect URL from a large response, pass the response to `extract_from_response` with a regex rather than re-emitting the whole body.
-5. **Discover indices before using them.** Repeater tools are index-based. Call `list_repeater_tabs` / `list_repeater_tab_history` first; never guess an index.
+5. **Discover indices before using them.** Repeater tools are index-based. Call `list_repeater_tabs` first; never guess an index.
 6. **Respect scope.** Before scanning, confirm the target is in scope (`is_in_scope`) or add it (`add_to_scope`). Scans on out-of-scope hosts may be blocked or unwanted.
 
 ---
@@ -31,33 +31,30 @@ This is the workhorse pattern for manual exploitation and fuzzing:
 
 ```
 1. list_repeater_tabs                       → find the tab index you want (e.g. 0)
-2. get_repeater_tab(tabIndex: 0)            → read the current request (and the user's last UI response)
+2. get_repeater_tab(tabIndex: 0)            → read the request the user set up + its target
 3. send_repeater_tab_request(0, request: "<modified raw request>")
-                                            → sets the request AND sends it in ONE call; returns the response
+                                            → sends through Burp's engine; returns the response
 4. (optional) extract_from_response(...)    → pull the value you care about
    repeat 3–4 with new payloads
 ```
 
-- **A real Repeater send.** `send_repeater_tab_request` clicks the tab's actual
-  Send button, so the request goes through Repeater just like a manual pentester
-  action: the response appears in the tab and the send is saved to the tab's
-  history. The response is also returned to you directly.
-- **Modify + send in one call.** Pass the optional `request` field to replace the
-  tab's request and send in a single step — the efficient fuzzing primitive (e.g.
-  change `/user/1` to `/user/2` to test authorization). You rarely need a separate
-  `set_repeater_tab_request` (that one stages a request WITHOUT sending, e.g.
-  preparing an exploit for the user to review).
-- **Target overrides switch to a direct send.** If you pass
-  `targetHostname/targetPort/usesHttps` (to hit a different host than the tab is
-  configured for), the request is sent through Burp's engine directly instead of
-  the Send button — the response is returned to you but does NOT appear in the tab
-  or its history. Omit the overrides to get the normal in-tab send.
+- **Repeater tabs are your request source.** The user sets up requests in Repeater;
+  you read them with `get_repeater_tab`, modify, and send. `get_repeater_tab` also
+  auto-detects the target (host/port/HTTPS), so you don't have to specify it.
+- **Modify + send in one call.** Pass the optional `request` field to
+  `send_repeater_tab_request` to send a MODIFIED request (e.g. change `/user/1` to
+  `/user/2` for an authorization test). Omit it to send the request already in the
+  tab. The response is returned to you directly.
+- **Where the response goes.** The send returns the response to you and it appears
+  in Burp's **Logger**. It does NOT render inside the Repeater tab's panel — Burp's
+  extension API has no way to push a response into a tab, so this is expected. To
+  see a response inside a Repeater tab, the user clicks Send there manually.
 
 Notes:
 - The raw request is a full HTTP message: `METHOD path HTTP/1.1\r\nHost: ...\r\n\r\nbody`.
   The server normalizes line endings, so `\n` is accepted, but keep the blank line
   between headers and body. This applies to `create_repeater_tab`,
-  `set_repeater_tab_request`, `send_to_intruder`, and the HTTP send tools.
+  `send_to_intruder`, and the HTTP send tools.
 - **HTTPS and port are auto-detected** from the tab's target label, an HTTPS
   toggle (older Burp), or — when neither is present — the request's protocol line
   (`HTTP/2` ⇒ HTTPS, port upgraded to 443) and the `Host` header. Detection is
@@ -66,19 +63,12 @@ Notes:
   ```
   send_repeater_tab_request(tabIndex: 0, targetHostname: "api.example.com", targetPort: 443, usesHttps: true)
   ```
-  The override always wins over auto-detection. You do not need to mutate Burp's UI.
+  The override always wins over auto-detection.
 - **Responses are truncated** to `maxResponseChars` (default 50000) so a huge body
   (e.g. a CDN error page) cannot overflow the token limit. The status line and
-  headers are always preserved (they come first). Pass a larger `maxResponseChars`
-  if you need more of the body.
-- To compare every payload sent in a tab (your normal in-tab sends and the user's
-  manual sends both appear here), use the **send history**:
-  ```
-  list_repeater_tab_history(0)              → ["0: https://.../login", "1: https://.../login", ...]
-  get_repeater_tab_history_item(0, 2)       → full request + response for entry #2
-  ```
-  This is non-destructive — the tab is briefly navigated then restored.
-  (Target-override/direct sends do not appear here.)
+  headers come first (preserved). Pass a larger `maxResponseChars` for more body.
+- `create_repeater_tab` stages a brand-new request as a Repeater tab for the user
+  to inspect or send manually.
 
 ---
 
@@ -88,7 +78,7 @@ Notes:
 
 | Goal | Tool |
 |---|---|
-| Replay/modify a request already in a Repeater tab | `set_repeater_tab_request` + `send_repeater_tab_request` |
+| Replay/modify a request from a Repeater tab | `send_repeater_tab_request` (optional `request` to modify) |
 | Send a brand-new one-off HTTP/1.1 request | `send_http1_request` (specify host/port/usesHttps) |
 | Send an HTTP/2 request (pseudo-headers) | `send_http2_request` |
 | Open a fresh Repeater tab for the user to see | `create_repeater_tab` |
@@ -161,24 +151,22 @@ IDs, redirect `Location` values, anti-CSRF nonces, etc.
 
 ## Worked examples
 
-**Extract a CSRF token and reuse it:**
+**Extract a CSRF token from a response, then reuse it in the next send:**
 ```
-resp = get_repeater_tab(0)                       # see the login form response
+resp = send_repeater_tab_request(0)              # send the login form request, get the response
 token = extract_from_response(resp, 'name="csrf" value="([^"]+)"', 1)
-set_repeater_tab_request(0, "POST /login HTTP/1.1\r\nHost: t\r\n...\r\n\r\ncsrf=<token>&user=admin&pass=x")
-send_repeater_tab_request(0)
+send_repeater_tab_request(0, request: "POST /login HTTP/1.1\r\nHost: t\r\n...\r\n\r\ncsrf=<token>&user=admin&pass=x")
+```
+
+**Authorization test (IDOR) — change the id and compare:**
+```
+get_repeater_tab(0)                                          # read the /user/1 request + target
+send_repeater_tab_request(0, request: "<same request with /user/2>")   # returns the response
 ```
 
 **Find every 500 error returned to a POST that mentions "exception":**
 ```
 search_proxy_history(statusCode: 500, method: "POST", bodyKeyword: "exception", count: 20, offset: 0)
-```
-
-**Review all payloads tried in a fuzzing tab:**
-```
-list_repeater_tab_history(0)
-# then for each interesting index:
-get_repeater_tab_history_item(0, <i>)
 ```
 
 **Find all JSON API responses in history:**
