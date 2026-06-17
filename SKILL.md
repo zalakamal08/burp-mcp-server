@@ -45,10 +45,13 @@ This is the workhorse pattern for manual exploitation and fuzzing:
   `send_repeater_tab_request` to send a MODIFIED request (e.g. change `/user/1` to
   `/user/2` for an authorization test). Omit it to send the request already in the
   tab. The response is returned to you directly.
-- **Where the response goes.** The send returns the response to you and it appears
-  in Burp's **Logger**. It does NOT render inside the Repeater tab's panel — Burp's
-  extension API has no way to push a response into a tab, so this is expected. To
-  see a response inside a Repeater tab, the user clicks Send there manually.
+- **A real Repeater send.** By default `send_repeater_tab_request` issues the
+  request through Repeater via its keyboard shortcut (Ctrl+Space), so the request
+  and response render in the tab and are saved to its history — like a manual send.
+- **Target overrides fall back to a direct send.** If you pass
+  `targetHostname/targetPort/usesHttps` to hit a different host than the tab is
+  configured for, the request is sent through Burp's engine directly — the response
+  is returned to you but does NOT render in the tab. Omit overrides for the in-tab send.
 
 Notes:
 - The raw request is a full HTTP message: `METHOD path HTTP/1.1\r\nHost: ...\r\n\r\nbody`.

@@ -25,6 +25,7 @@ import java.awt.Component
 import java.awt.Container
 import java.awt.EventQueue
 import java.awt.KeyboardFocusManager
+import java.awt.event.KeyEvent
 import java.util.regex.Pattern
 import javax.swing.AbstractButton
 import javax.swing.JCheckBox
@@ -556,38 +557,53 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
     }
 
     if (enabled("send_repeater_tab_request")) mcpTool<SendRepeaterTabRequest>(
-        "Sends a Repeater tab's request through Burp's HTTP engine and returns the response. " +
-        "The target (host/port/HTTPS) is auto-detected from the tab; pass the optional 'request' field to send a " +
-        "MODIFIED request instead of the one in the tab (ideal for fuzzing, e.g. change /user/1 to /user/2). " +
-        "Override the target with targetHostname/targetPort/usesHttps if needed. " +
-        "Large responses are truncated to maxResponseChars (default 50000). " +
-        "Note: the response is returned here; it does not render inside the Repeater tab (Burp's API has no way to " +
-        "push a response into a tab). The request is visible in Burp's Logger. Use list_repeater_tabs to find indices."
+        "Sends a Repeater tab's request and returns the response. By default it issues the request THROUGH Repeater " +
+        "using the keyboard shortcut (Ctrl+Space), so the request and response render in the tab and are saved to the " +
+        "tab's history — exactly like a manual send. Pass the optional 'request' field to send a MODIFIED request " +
+        "instead of the one in the tab (ideal for fuzzing, e.g. change /user/1 to /user/2). " +
+        "If you override the target (targetHostname/targetPort/usesHttps) to hit a different host, it falls back to a " +
+        "direct engine send (response returned but NOT shown in the tab). Large responses are truncated to " +
+        "maxResponseChars (default 50000). Use list_repeater_tabs to find tab indices."
     ) {
         val info = repeaterTabConnectionInfo(tabIndex, api)
             ?: return@mcpTool "Could not read Repeater tab $tabIndex. Verify the index is valid and the tab contains a request."
 
+        val overrideTarget = targetHostname != null || targetPort != null || usesHttps != null
         val requestToSend = request ?: info.request
         val host = targetHostname ?: info.hostname
         val port = targetPort ?: info.port
         val https = usesHttps ?: info.usesHttps ?: false
         debugLog(config, api, "send_repeater_tab_request: tab=$tabIndex inlineRequest=${request != null} " +
-            "resolved host=$host port=$port https=$https")
+            "overrideTarget=$overrideTarget resolved host=$host port=$port https=$https")
 
+        // Scope/approval check using the best-effort target (skipped only if undetectable).
+        if (host != null && port != null) {
+            val allowed = runBlocking {
+                HttpRequestSecurity.checkHttpRequestPermission(host, port, config, requestToSend, api)
+            }
+            if (!allowed) {
+                api.logging().logToOutput("MCP Repeater tab $tabIndex request denied: $host:$port")
+                return@mcpTool "Send HTTP request denied by Burp Suite"
+            }
+        }
+
+        // Preferred path: issue through Repeater via Ctrl+Space so the response shows in the tab.
+        // Only when not redirecting to a different target (the tab issues to its own configured target).
+        if (!overrideTarget) {
+            api.logging().logToOutput("MCP sending Repeater tab $tabIndex via Ctrl+Space")
+            val uiResponse = sendRepeaterTabViaKeyboard(tabIndex, request, api, config)
+            if (uiResponse != null) {
+                return@mcpTool truncateResponse(uiResponse, maxResponseChars)
+            }
+            api.logging().logToOutput("MCP Repeater tab $tabIndex: Ctrl+Space produced no response, using direct engine send")
+        }
+
+        // Fallback / override path: send directly through Burp's HTTP engine.
         if (host == null || port == null) {
             return@mcpTool "Could not determine the target for Repeater tab $tabIndex. " +
                 "Pass targetHostname, targetPort, and usesHttps explicitly."
         }
-
-        val allowed = runBlocking {
-            HttpRequestSecurity.checkHttpRequestPermission(host, port, config, requestToSend, api)
-        }
-        if (!allowed) {
-            api.logging().logToOutput("MCP Repeater tab $tabIndex request denied: $host:$port")
-            return@mcpTool "Send HTTP request denied by Burp Suite"
-        }
-
-        api.logging().logToOutput("MCP sending Repeater tab $tabIndex: ${if (https) "https" else "http"}://$host:$port")
+        api.logging().logToOutput("MCP sending Repeater tab $tabIndex (direct): ${if (https) "https" else "http"}://$host:$port")
         val fixedRequest = normalizeHttpLineEndings(requestToSend)
         val httpRequest = HttpRequest.httpRequest(HttpService.httpService(host, port, https), fixedRequest)
         val response = api.http().sendRequest(httpRequest)
@@ -874,6 +890,83 @@ private fun repeaterTabResponseText(tabIndex: Int, api: MontoyaApi): String? {
         result = findRepeaterResponseArea(tabComp)?.text?.takeIf { it.isNotBlank() }
     }
     return result
+}
+
+// Issues a Repeater tab's request by focusing the request editor and dispatching the
+// Ctrl+Space shortcut (Burp's default "Issue request"), so the request goes through
+// Repeater — the response renders in the tab and is saved to the tab's history.
+// Optionally writes a modified request into the editor first (editing the visible editor
+// is known to work; only sending was missing). Returns the response text if a NEW response
+// appeared, otherwise null (so the caller can fall back to a direct engine send).
+private fun sendRepeaterTabViaKeyboard(
+    tabIndex: Int, request: String?, api: MontoyaApi, config: McpConfig, timeoutMs: Long = 12000
+): String? {
+    val frame = api.userInterface().swingUtils().suiteFrame()
+
+    fun tabContainer(): Container? {
+        val pane = findRepeaterInnerTabbedPane(frame) ?: return null
+        if (tabIndex < 0 || tabIndex >= pane.tabCount) return null
+        return pane.getComponentAt(tabIndex) as? Container
+    }
+
+    var baseline: String? = null
+    var editorFound = false
+    runOnEdt {
+        val pane = findRepeaterInnerTabbedPane(frame) ?: return@runOnEdt
+        if (tabIndex < 0 || tabIndex >= pane.tabCount) return@runOnEdt
+        pane.selectedIndex = tabIndex  // make this the active tab so the shortcut targets it
+        val tabComp = pane.getComponentAt(tabIndex) as? Container ?: return@runOnEdt
+        baseline = findRepeaterResponseArea(tabComp)?.text ?: ""
+        val area = findRepeaterRequestArea(tabComp) ?: return@runOnEdt
+        if (request != null) area.text = request   // editing the visible editor already works
+        area.requestFocusInWindow()
+        editorFound = true
+    }
+    if (!editorFound) {
+        debugLog(config, api, "keyboard send tab $tabIndex: request editor not found")
+        return null
+    }
+
+    Thread.sleep(150)  // let focus settle before dispatching the key
+
+    runOnEdt {
+        val tabComp = tabContainer()
+        val focusOwner = KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner
+        val target: Component? = focusOwner ?: tabComp?.let { findRepeaterRequestArea(it) }
+        if (target != null) {
+            val now = System.currentTimeMillis()
+            target.dispatchEvent(KeyEvent(target, KeyEvent.KEY_PRESSED, now, KeyEvent.CTRL_DOWN_MASK, KeyEvent.VK_SPACE, KeyEvent.CHAR_UNDEFINED))
+            target.dispatchEvent(KeyEvent(target, KeyEvent.KEY_TYPED, now, KeyEvent.CTRL_DOWN_MASK, KeyEvent.VK_UNDEFINED, ' '))
+            target.dispatchEvent(KeyEvent(target, KeyEvent.KEY_RELEASED, now, KeyEvent.CTRL_DOWN_MASK, KeyEvent.VK_SPACE, KeyEvent.CHAR_UNDEFINED))
+            debugLog(config, api, "keyboard send tab $tabIndex: dispatched Ctrl+Space to ${target.javaClass.simpleName}")
+        } else {
+            debugLog(config, api, "keyboard send tab $tabIndex: no focus target for Ctrl+Space")
+        }
+    }
+
+    // Poll for a NEW response to appear in the tab.
+    val deadline = System.currentTimeMillis() + timeoutMs
+    var polls = 0
+    while (System.currentTimeMillis() < deadline) {
+        Thread.sleep(150)
+        polls++
+        var changed = false
+        runOnEdt {
+            val tabComp = tabContainer() ?: return@runOnEdt
+            val cur = findRepeaterResponseArea(tabComp)?.text
+            if (!cur.isNullOrBlank() && cur != baseline) changed = true
+        }
+        if (changed) break
+    }
+
+    Thread.sleep(100)  // settle
+    var finalResp: String? = null
+    runOnEdt {
+        val tabComp = tabContainer() ?: return@runOnEdt
+        finalResp = findRepeaterResponseArea(tabComp)?.text?.takeIf { it.isNotBlank() && it != baseline }
+    }
+    debugLog(config, api, "keyboard send tab $tabIndex: responseChanged=${finalResp != null} polls=$polls len=${finalResp?.length ?: 0}")
+    return finalResp
 }
 
 // Returns the top-level Repeater panel — the container that holds the inner tabbed pane
