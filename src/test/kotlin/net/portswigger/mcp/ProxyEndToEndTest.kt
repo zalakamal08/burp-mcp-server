@@ -150,14 +150,14 @@ class ProxyEndToEndTest {
         runBlocking {
             val tools = client.listTools()
             assertFalse(tools.isEmpty(), "Tool list should not be empty")
-            assertTrue(tools.any { it.name == "url_encode" }, "url_encode tool should be present")
+            assertTrue(tools.any { it.name == "list_repeater_tabs" }, "list_repeater_tabs tool should be present")
         }
     }
 
     @Test
-    fun `proxy should call url_encode tool`() {
+    fun `proxy should call list_repeater_tabs tool`() {
         runBlocking {
-            val result = client.callTool("url_encode", mapOf("content" to "hello world"))
+            val result = client.callTool("list_repeater_tabs", emptyMap())
             assertNotNull(result, "Tool call result should not be null")
             assertFalse(result?.isError ?: true, "Tool call should not return an error")
             assertTrue(result?.content?.first() is TextContent, "Result should contain TextContent")

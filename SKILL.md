@@ -1,6 +1,6 @@
 ---
 name: burp-mcp
-description: Use when interacting with Burp Suite through its MCP server (zalakamal08/burp-mcp-server) to perform web security testing — replaying and modifying HTTP requests via Repeater tabs, reviewing proxy history (including original vs modified requests/responses), running scans, and extracting values from responses. Teaches the most token-efficient tool choices and the standard request→modify→resend testing loop.
+description: Use when interacting with Burp Suite through its MCP server (zalakamal08/burp-mcp-server) to perform web security testing — replaying and modifying HTTP requests via Repeater tabs, reviewing proxy history (including original vs modified requests/responses), and running scans. Teaches the most token-efficient tool choices and the standard request→modify→resend testing loop.
 ---
 
 # Burp Suite MCP — Efficient Usage Guide
@@ -11,9 +11,10 @@ This skill teaches an AI agent how to drive Burp Suite through the MCP server
 proven web-pentest workflows.
 
 This is a lean build focused on the request → modify → resend loop. It exposes
-**22 tools** across Repeater, Proxy, Scanner (Pro), Intruder, Utilities, and Editor.
-There are intentionally **no** raw HTTP-send, scope, site-map, or config-editing
-tools — send requests through Repeater instead.
+**13 tools** across Repeater, Proxy, and Scanner (Pro). There are intentionally
+**no** raw HTTP-send, scope, site-map, config-editing, Intruder, utility
+(encode/decode/regex-extract), or editor tools in this build — send requests
+through Repeater instead.
 
 All tools are prefixed `mcp__burp__` in Claude Code. Tool names below omit the prefix.
 
@@ -24,8 +25,7 @@ All tools are prefixed `mcp__burp__` in Claude Code. Tool names below omit the p
 1. **Read, then send.** Use `get_repeater_tab` to read a tab's request + target in one call, then `send_repeater_tab_request` (optionally with a modified `request`) to send it.
 2. **Never dump full history when you can filter.** Use `get_proxy_http_history_regex` (or `get_proxy_websocket_history_regex`) instead of paging through unfiltered history. This saves enormous token volume.
 3. **Always paginate.** History tools take `count` and `offset`. Start with a small `count` (e.g. 20) and page with `offset` only if needed.
-4. **Extract, don't re-read.** When you only need a token/CSRF value/redirect URL from a large response, pass the response to `extract_from_response` with a regex rather than re-emitting the whole body.
-5. **Discover indices before using them.** Repeater tools are index-based. Call `list_repeater_tabs` first; never guess an index.
+4. **Discover indices before using them.** Repeater tools are index-based. Call `list_repeater_tabs` first; never guess an index.
 
 ---
 
@@ -38,8 +38,7 @@ This is the workhorse pattern for manual exploitation and fuzzing:
 2. get_repeater_tab(tabIndex: 0)            → read the request the user set up + its target
 3. send_repeater_tab_request(0, request: "<modified raw request>")
                                             → sends through Burp's engine; returns the response
-4. (optional) extract_from_response(...)    → pull the value you care about
-   repeat 3–4 with new payloads
+   repeat 3 with new payloads, comparing responses by hand
 ```
 
 - **Repeater tabs are your request source.** The user sets up requests in Repeater;
@@ -60,7 +59,7 @@ This is the workhorse pattern for manual exploitation and fuzzing:
 Notes:
 - The raw request is a full HTTP message: `METHOD path HTTP/1.1\r\nHost: ...\r\n\r\nbody`.
   The server normalizes line endings, so `\n` is accepted, but keep the blank line
-  between headers and body. This applies to `create_repeater_tab` and `send_to_intruder` too.
+  between headers and body. This applies to `create_repeater_tab` too.
 - **HTTPS and port are auto-detected** from the tab's target label, an HTTPS
   toggle (older Burp), or — when neither is present — the request's protocol line
   (`HTTP/2` ⇒ HTTPS, port upgraded to 443) and the `Host` header. Detection is
@@ -75,8 +74,7 @@ Notes:
   headers come first (preserved). Pass a larger `maxResponseChars` for more body.
 - `create_repeater_tab` stages a brand-new request as a Repeater tab for the user
   to inspect or send manually. You must supply `targetHostname`, `targetPort`, and
-  `usesHttps` explicitly for it and for `send_to_intruder` — these are NOT
-  auto-detected (unlike Repeater-tab sends).
+  `usesHttps` explicitly for it — these are NOT auto-detected (unlike Repeater-tab sends).
 
 ---
 
@@ -88,7 +86,6 @@ Notes:
 |---|---|
 | Replay/modify a request from a Repeater tab | `send_repeater_tab_request` (optional `request` to modify) |
 | Open a fresh Repeater tab for the user to see | `create_repeater_tab` |
-| Hand a request to Intruder for the user | `send_to_intruder` |
 
 There is no raw one-off HTTP-send tool in this build — put the request in a Repeater
 tab (`create_repeater_tab`) and send it with `send_repeater_tab_request`.
@@ -127,36 +124,9 @@ modified request is returned and a `variantNote` field says so.
 If a scanner tool errors with an edition message, the user is on Community — fall
 back to manual testing via Repeater.
 
-### Utilities (cheap, local — prefer over reasoning by hand)
-
-| Goal | Tool |
-|---|---|
-| Extract regex matches from a response | `extract_from_response(response, regex, group)` |
-| URL encode/decode | `url_encode` / `url_decode` |
-| Base64 encode/decode | `base64_encode` / `base64_decode` |
-| Random string (e.g. cache buster, nonce) | `generate_random_string(length, characterSet)` |
-
-`extract_from_response`: `group=0` returns the whole match; `group=1+` returns that
-capture group. Returns all matches, one per line. Use it for CSRF tokens, session
-IDs, redirect `Location` values, anti-CSRF nonces, etc.
-
-### Active editor
-
-| Goal | Tool |
-|---|---|
-| Read what the user has open in an editor | `get_active_editor_contents` |
-| Write into the active editor | `set_active_editor_contents` |
-
 ---
 
 ## Worked examples
-
-**Extract a CSRF token from a response, then reuse it in the next send:**
-```
-resp = send_repeater_tab_request(0)              # send the login form request, get the response
-token = extract_from_response(resp, 'name="csrf" value="([^"]+)"', 1)
-send_repeater_tab_request(0, request: "POST /login HTTP/1.1\r\nHost: t\r\n...\r\n\r\ncsrf=<token>&user=admin&pass=x")
-```
 
 **Authorization test (IDOR) — change the id and compare:**
 ```
@@ -181,7 +151,6 @@ get_proxy_http_history_item(index: 5, requestModified: true)    # what Burp actu
 
 - Am I about to pull full history? → switch to `get_proxy_http_history_regex`.
 - Am I reading a tab's request and response separately? → use `get_repeater_tab`.
-- Am I re-reading a big response to find one value? → use `extract_from_response`.
 - Did I guess an index? → list first.
 - Big result expected? → set a small `count`, page only if needed.
 - Scanning? → confirm Pro edition.

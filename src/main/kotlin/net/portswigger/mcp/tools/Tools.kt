@@ -84,31 +84,6 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
         api.repeater().sendToRepeater(request, tabName)
     }
 
-    if (enabled("send_to_intruder")) mcpTool<SendToIntruder>("Sends an HTTP request to Intruder with the specified HTTP request and optional tab name. Line endings are normalized to HTTP CRLF automatically.") {
-        val request = HttpRequest.httpRequest(toMontoyaService(), normalizeHttpLineEndings(content))
-        api.intruder().sendToIntruder(request, tabName)
-    }
-
-    if (enabled("url_encode")) mcpTool<UrlEncode>("URL encodes the input string") {
-        api.utilities().urlUtils().encode(content)
-    }
-
-    if (enabled("url_decode")) mcpTool<UrlDecode>("URL decodes the input string") {
-        api.utilities().urlUtils().decode(content)
-    }
-
-    if (enabled("base64_encode")) mcpTool<Base64Encode>("Base64 encodes the input string") {
-        api.utilities().base64Utils().encodeToString(content)
-    }
-
-    if (enabled("base64_decode")) mcpTool<Base64Decode>("Base64 decodes the input string") {
-        api.utilities().base64Utils().decode(content).toString()
-    }
-
-    if (enabled("generate_random_string")) mcpTool<GenerateRandomString>("Generates a random string of specified length and character set") {
-        api.utilities().randomUtils().randomString(length, characterSet)
-    }
-
     if (api.burpSuite().version().edition() == BurpSuiteEdition.PROFESSIONAL) {
         if (enabled("get_scanner_issues")) mcpPaginatedTool<GetScannerIssues>("Displays information about issues identified by the scanner") {
             api.siteMap().issues().asSequence().map { Json.encodeToString(it.toSerializableForm()) }
@@ -283,35 +258,6 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
     }
 
     // -------------------------------------------------------------------------
-    // Response extraction
-    // -------------------------------------------------------------------------
-
-    if (enabled("extract_from_response")) mcpTool<ExtractFromResponse>(
-        "Extracts all regex matches from an HTTP response string. " +
-        "Use 'group' to select a specific capture group (0 = entire match, 1+ = numbered group). " +
-        "Useful for pulling out CSRF tokens, auth values, redirect URLs, or any pattern from a response. " +
-        "The response can come from send_repeater_tab_request or any proxy history tool."
-    ) {
-        val compiled = try {
-            Pattern.compile(regex, Pattern.DOTALL)
-        } catch (e: Exception) {
-            return@mcpTool "Invalid regex: ${e.message}"
-        }
-
-        val matcher = compiled.matcher(response)
-        val results = mutableListOf<String>()
-
-        while (matcher.find()) {
-            if (group > matcher.groupCount()) {
-                return@mcpTool "Group $group does not exist — the regex has ${matcher.groupCount()} capture group(s)."
-            }
-            results.add(matcher.group(group) ?: "")
-        }
-
-        if (results.isEmpty()) "No matches found" else results.joinToString("\n")
-    }
-
-    // -------------------------------------------------------------------------
     // Repeater tabs
     // -------------------------------------------------------------------------
 
@@ -410,36 +356,6 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
         truncateResponse(response?.toString() ?: "<no response>", maxResponseChars)
     }
 
-    if (enabled("get_active_editor_contents")) mcpTool("get_active_editor_contents", "Outputs the contents of the user's active message editor") {
-        getActiveEditor(api)?.text ?: "<No active editor>"
-    }
-
-    if (enabled("set_active_editor_contents")) mcpTool<SetActiveEditorContents>("Sets the content of the user's active message editor") {
-        val editor = getActiveEditor(api) ?: return@mcpTool "<No active editor>"
-
-        if (!editor.isEditable) {
-            return@mcpTool "<Current editor is not editable>"
-        }
-
-        editor.text = text
-
-        "Editor text has been set"
-    }
-}
-
-fun getActiveEditor(api: MontoyaApi): JTextArea? {
-    val frame = api.userInterface().swingUtils().suiteFrame()
-
-    val focusManager = KeyboardFocusManager.getCurrentKeyboardFocusManager()
-    val permanentFocusOwner = focusManager.permanentFocusOwner
-
-    val isInBurpWindow = generateSequence(permanentFocusOwner) { it.parent }.any { it == frame }
-
-    return if (isInBurpWindow && permanentFocusOwner is JTextArea) {
-        permanentFocusOwner
-    } else {
-        null
-    }
 }
 
 interface HttpServiceParams {
@@ -458,33 +374,6 @@ data class CreateRepeaterTab(
     override val targetPort: Int,
     override val usesHttps: Boolean
 ) : HttpServiceParams
-
-@Serializable
-data class SendToIntruder(
-    val tabName: String?,
-    val content: String,
-    override val targetHostname: String,
-    override val targetPort: Int,
-    override val usesHttps: Boolean
-) : HttpServiceParams
-
-@Serializable
-data class UrlEncode(val content: String)
-
-@Serializable
-data class UrlDecode(val content: String)
-
-@Serializable
-data class Base64Encode(val content: String)
-
-@Serializable
-data class Base64Decode(val content: String)
-
-@Serializable
-data class GenerateRandomString(val length: Int, val characterSet: String)
-
-@Serializable
-data class SetActiveEditorContents(val text: String)
 
 @Serializable
 data class GetScannerIssues(override val count: Int, override val offset: Int) : Paginated
@@ -549,13 +438,6 @@ data class SendRepeaterTabRequest(
     val targetPort: Int? = null,
     val usesHttps: Boolean? = null,
     val maxResponseChars: Int = 50000
-)
-
-@Serializable
-data class ExtractFromResponse(
-    val response: String,
-    val regex: String,
-    val group: Int = 0
 )
 
 // ---------------------------------------------------------------------------

@@ -28,25 +28,10 @@ object ToolDefinitions {
         ToolDef("start_passive_scan", "Start passive scan", "Scanner", proOnly = true),
         ToolDef("generate_collaborator_payload", "Generate Collaborator payload", "Scanner", proOnly = true),
         ToolDef("get_collaborator_interactions", "Get Collaborator interactions", "Scanner", proOnly = true),
-
-        // Intruder
-        ToolDef("send_to_intruder", "Send to Intruder", "Intruder"),
-
-        // Utilities
-        ToolDef("url_encode", "URL encode", "Utilities"),
-        ToolDef("url_decode", "URL decode", "Utilities"),
-        ToolDef("base64_encode", "Base64 encode", "Utilities"),
-        ToolDef("base64_decode", "Base64 decode", "Utilities"),
-        ToolDef("generate_random_string", "Generate random string", "Utilities"),
-        ToolDef("extract_from_response", "Extract from response (regex)", "Utilities"),
-
-        // Editor
-        ToolDef("get_active_editor_contents", "Get active editor contents", "Editor"),
-        ToolDef("set_active_editor_contents", "Set active editor contents", "Editor"),
     )
 
     val categoryOrder = listOf(
-        "Repeater", "Proxy", "Scanner", "Intruder", "Utilities", "Editor"
+        "Repeater", "Proxy", "Scanner"
     )
 
     val byCategory: Map<String, List<ToolDef>> = all.groupBy { it.category }

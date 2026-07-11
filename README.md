@@ -99,7 +99,7 @@ http://X.X.X.X:9876/sse
 
 ## Available Tools
 
-**22 tools across 6 categories.** This build is deliberately trimmed to the request/response testing loop — the raw HTTP-send, scope, site-map, and configuration-editing tool groups from upstream have been removed to keep the server lightweight and reduce the tool surface the AI has to reason about.
+**13 tools across 3 categories.** This build is deliberately trimmed to the core proxy/Repeater testing loop — the raw HTTP-send, Scope, Site Map, Configuration, Intruder, Utilities, and Editor tool groups from upstream have been removed to keep the server lightweight and reduce the tool surface the AI has to reason about. (Utilities/Intruder/Editor functionality is planned to return once retested.)
 
 ### Repeater
 
@@ -135,35 +135,11 @@ http://X.X.X.X:9876/sse
 | `generate_collaborator_payload` | Generate a Burp Collaborator payload |
 | `get_collaborator_interactions` | Poll Collaborator for interactions |
 
-### Intruder
-
-| Tool | Description |
-|---|---|
-| `send_to_intruder` | Send a request to Intruder |
-
-### Utilities
-
-| Tool | Description |
-|---|---|
-| `url_encode` | URL-encode a string |
-| `url_decode` | URL-decode a string |
-| `base64_encode` | Base64-encode a string |
-| `base64_decode` | Base64-decode a string |
-| `generate_random_string` | Generate a random string |
-| `extract_from_response` | Extract all regex matches from an HTTP response string (supports capture groups) |
-
-### Editor
-
-| Tool | Description |
-|---|---|
-| `get_active_editor_contents` | Read the active Burp message editor |
-| `set_active_editor_contents` | Write to the active Burp message editor |
-
 ---
 
 ## Why use this MCP server
 
-- **Lean, focused tool set.** 22 tools centred on the request → modify → resend loop, instead of a sprawling surface. Fewer tools means the AI picks the right one faster and wastes fewer tokens deciding.
+- **Lean, focused tool set.** 13 tools centred on the request → modify → resend loop, instead of a sprawling surface. Fewer tools means the AI picks the right one faster and wastes fewer tokens deciding.
 - **Original *and* modified proxy traffic.** Uniquely exposes the request as it left the client *and* the request Burp actually sent, plus original vs modified responses — so an agent can reason about exactly what match/replace rules and manual edits changed.
 - **Ships with an agent skill.** The bundled [`SKILL.md`](SKILL.md) teaches AI agents the most token-efficient tool choices and the standard testing loop, so you get good behaviour out of the box rather than trial-and-error.
 - **Approval-gated by design.** Sending requests and reading proxy history go through Burp's in-app approval prompts and an auto-approve allowlist, keeping a human in the loop for sensitive actions.
@@ -193,6 +169,6 @@ Output: `build/libs/burp-mcp-<version>-all.jar`
 
 This project is a fork of **[PortSwigger/mcp-server](https://github.com/PortSwigger/mcp-server)** — the official Burp Suite MCP Server extension by PortSwigger (Daniel S. and Daniel Allen). All of the original architecture, MCP server plumbing, Burp integration, and Stdio proxy come from that project; full credit to the PortSwigger team.
 
-This fork adapts it for a leaner, testing-focused workflow: it trims the tool set (removing the HTTP-send, Scope, Site Map, and Configuration groups), adds original-vs-modified proxy traffic support, and ships an AI agent skill.
+This fork adapts it for a leaner, testing-focused workflow: it trims the tool set (removing the HTTP-send, Scope, Site Map, Configuration, Intruder, Utilities, and Editor groups — Repeater, Proxy, and Scanner remain), adds original-vs-modified proxy traffic support, and ships an AI agent skill.
 
 Licensed under **GPL-3.0**, inherited from the upstream project.
