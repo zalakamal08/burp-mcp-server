@@ -2,6 +2,8 @@
 
 A Burp Suite extension that exposes Burp tooling to AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/).
 
+> Forked from PortSwigger's official **[Burp MCP Server](https://github.com/PortSwigger/mcp-server)** and trimmed to a lean, testing-focused tool set. See [Credits & Attribution](#credits--attribution).
+
 > **🤖 Agent skill:** This repo ships a Claude Code skill ([`SKILL.md`](SKILL.md)) that teaches AI agents how to use these tools *efficiently*. Install it into your Claude Code skills directory with one line:
 > ```bash
 > curl -fsSL https://raw.githubusercontent.com/zalakamal08/burp-mcp-server/main/install-skill.sh | bash
@@ -97,51 +99,31 @@ http://X.X.X.X:9876/sse
 
 ## Available Tools
 
+**22 tools across 6 categories.** This build is deliberately trimmed to the request/response testing loop — the raw HTTP-send, scope, site-map, and configuration-editing tool groups from upstream have been removed to keep the server lightweight and reduce the tool surface the AI has to reason about.
+
 ### Repeater
 
 | Tool | Description |
 |---|---|
 | `create_repeater_tab` | Open a new Repeater tab with a given request |
 | `list_repeater_tabs` | List all open Repeater tabs (index + name) |
-| `get_repeater_tab` | Get the current request and last response from a tab |
-| `set_repeater_tab_request` | Write new request text into a tab |
-| `send_repeater_tab_request` | Send the tab's request through Burp's HTTP engine |
-| `list_repeater_tab_history` | List all previously sent requests in a tab |
-| `get_repeater_tab_history_item` | Get request + response for a specific history entry |
+| `get_repeater_tab` | Get a tab's current request and target |
+| `send_repeater_tab_request` | Send the tab's request and capture the response |
 
 ### Proxy
 
 | Tool | Description |
 |---|---|
-| `get_proxy_http_history` | Paginated HTTP proxy history |
-| `get_proxy_http_history_regex` | Filter HTTP history by URL regex |
-| `get_proxy_http_history_item` | Get a single history item by index |
+| `get_proxy_http_history_regex` | Filter HTTP proxy history by regex |
+| `get_proxy_http_history_item` | Get a single history item by index — see **original vs modified** below |
 | `get_proxy_websocket_history` | Paginated WebSocket history |
 | `get_proxy_websocket_history_regex` | Filter WebSocket history by regex |
-| `set_proxy_intercept_state` | Turn proxy intercept on or off |
-| `search_proxy_history` | Filter history by status code, method, Content-Type, or body keyword (AND logic) |
 
-### HTTP
-
-| Tool | Description |
-|---|---|
-| `send_http1_request` | Send an HTTP/1.1 request through Burp |
-| `send_http2_request` | Send an HTTP/2 request through Burp |
-
-### Scope
-
-| Tool | Description |
-|---|---|
-| `is_in_scope` | Check if a URL is in scope |
-| `add_to_scope` | Add a URL to scope |
-| `remove_from_scope` | Remove a URL from scope |
-
-### Site Map
-
-| Tool | Description |
-|---|---|
-| `get_site_map` | Get the full site map |
-| `get_site_map_for_url` | Get site map entries for a specific URL |
+> **Original vs modified traffic.** `get_proxy_http_history_item` takes two optional flags, `requestModified` and `responseModified` (both default `true`), giving four combinations:
+> - `requestModified=true` → the final request Burp sent (after match/replace rules and manual Proxy edits); `false` → the request exactly as received from the client.
+> - `responseModified=true` → the processed response; `false` → the original response received from the server.
+>
+> Burp's history API only retains the *modified* request, so the **original request is captured live** by the extension and is only available for traffic proxied while the extension is running — for older history the modified request is returned and a `variantNote` field explains it.
 
 ### Scanner *(Burp Suite Pro only)*
 
@@ -158,16 +140,6 @@ http://X.X.X.X:9876/sse
 | Tool | Description |
 |---|---|
 | `send_to_intruder` | Send a request to Intruder |
-
-### Configuration
-
-| Tool | Description |
-|---|---|
-| `output_project_options` | Export project options as JSON |
-| `output_user_options` | Export user options as JSON |
-| `set_project_options` | Set project options from JSON |
-| `set_user_options` | Set user options from JSON |
-| `set_task_execution_engine_state` | Pause or resume the task execution engine |
 
 ### Utilities
 
@@ -189,6 +161,16 @@ http://X.X.X.X:9876/sse
 
 ---
 
+## Why use this MCP server
+
+- **Lean, focused tool set.** 22 tools centred on the request → modify → resend loop, instead of a sprawling surface. Fewer tools means the AI picks the right one faster and wastes fewer tokens deciding.
+- **Original *and* modified proxy traffic.** Uniquely exposes the request as it left the client *and* the request Burp actually sent, plus original vs modified responses — so an agent can reason about exactly what match/replace rules and manual edits changed.
+- **Ships with an agent skill.** The bundled [`SKILL.md`](SKILL.md) teaches AI agents the most token-efficient tool choices and the standard testing loop, so you get good behaviour out of the box rather than trial-and-error.
+- **Approval-gated by design.** Sending requests and reading proxy history go through Burp's in-app approval prompts and an auto-approve allowlist, keeping a human in the loop for sensitive actions.
+- **Works with any MCP client** over SSE, with a bundled Stdio proxy for Claude Desktop / Claude Code and other desktop clients.
+
+---
+
 ## Building from Source
 
 ```bash
@@ -204,3 +186,13 @@ Output: `build/libs/burp-mcp-<version>-all.jar`
 - Tool logic: `src/main/kotlin/net/portswigger/mcp/tools/Tools.kt`
 - Tool list (for the UI panel): `src/main/kotlin/net/portswigger/mcp/config/ToolDefinitions.kt`
 - Implement a `@Serializable` data class for the parameters, register it inside `registerTools`, and add an entry to `ToolDefinitions`. Implement `Paginated` for auto-pagination support.
+
+---
+
+## Credits & Attribution
+
+This project is a fork of **[PortSwigger/mcp-server](https://github.com/PortSwigger/mcp-server)** — the official Burp Suite MCP Server extension by PortSwigger (Daniel S. and Daniel Allen). All of the original architecture, MCP server plumbing, Burp integration, and Stdio proxy come from that project; full credit to the PortSwigger team.
+
+This fork adapts it for a leaner, testing-focused workflow: it trims the tool set (removing the HTTP-send, Scope, Site Map, and Configuration groups), adds original-vs-modified proxy traffic support, and ships an AI agent skill.
+
+Licensed under **GPL-3.0**, inherited from the upstream project.

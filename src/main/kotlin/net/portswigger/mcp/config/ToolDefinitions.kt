@@ -17,26 +17,10 @@ object ToolDefinitions {
         ToolDef("send_repeater_tab_request", "Send tab request", "Repeater"),
 
         // Proxy
-        ToolDef("get_proxy_http_history", "Get HTTP history", "Proxy"),
         ToolDef("get_proxy_http_history_regex", "Get HTTP history (regex filter)", "Proxy"),
         ToolDef("get_proxy_http_history_item", "Get HTTP history item by index", "Proxy"),
         ToolDef("get_proxy_websocket_history", "Get WebSocket history", "Proxy"),
         ToolDef("get_proxy_websocket_history_regex", "Get WebSocket history (regex filter)", "Proxy"),
-        ToolDef("set_proxy_intercept_state", "Set intercept on/off", "Proxy"),
-        ToolDef("search_proxy_history", "Search proxy history", "Proxy"),
-
-        // HTTP
-        ToolDef("send_http1_request", "Send HTTP/1.1 request", "HTTP"),
-        ToolDef("send_http2_request", "Send HTTP/2 request", "HTTP"),
-
-        // Scope
-        ToolDef("is_in_scope", "Check URL in scope", "Scope"),
-        ToolDef("add_to_scope", "Add URL to scope", "Scope"),
-        ToolDef("remove_from_scope", "Remove URL from scope", "Scope"),
-
-        // Site Map
-        ToolDef("get_site_map", "Get site map", "Site Map"),
-        ToolDef("get_site_map_for_url", "Get site map for URL", "Site Map"),
 
         // Scanner (Pro only)
         ToolDef("get_scanner_issues", "Get scanner issues", "Scanner", proOnly = true),
@@ -47,13 +31,6 @@ object ToolDefinitions {
 
         // Intruder
         ToolDef("send_to_intruder", "Send to Intruder", "Intruder"),
-
-        // Configuration
-        ToolDef("output_project_options", "Export project options", "Configuration"),
-        ToolDef("output_user_options", "Export user options", "Configuration"),
-        ToolDef("set_project_options", "Set project options", "Configuration"),
-        ToolDef("set_user_options", "Set user options", "Configuration"),
-        ToolDef("set_task_execution_engine_state", "Set task execution engine state", "Configuration"),
 
         // Utilities
         ToolDef("url_encode", "URL encode", "Utilities"),
@@ -69,8 +46,7 @@ object ToolDefinitions {
     )
 
     val categoryOrder = listOf(
-        "Repeater", "Proxy", "HTTP", "Scope", "Site Map", "Scanner", "Intruder",
-        "Configuration", "Utilities", "Editor"
+        "Repeater", "Proxy", "Scanner", "Intruder", "Utilities", "Editor"
     )
 
     val byCategory: Map<String, List<ToolDef>> = all.groupBy { it.category }

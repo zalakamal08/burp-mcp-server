@@ -1,17 +1,11 @@
 package net.portswigger.mcp.tools
 
 import burp.api.montoya.MontoyaApi
-import burp.api.montoya.burpsuite.TaskExecutionEngine.TaskExecutionEngineState.PAUSED
-import burp.api.montoya.burpsuite.TaskExecutionEngine.TaskExecutionEngineState.RUNNING
 import burp.api.montoya.collaborator.InteractionFilter
 import burp.api.montoya.core.BurpSuiteEdition
-import burp.api.montoya.http.HttpMode
 import burp.api.montoya.http.HttpService
-import burp.api.montoya.http.message.HttpHeader
-import burp.api.montoya.http.message.HttpRequestResponse
 import burp.api.montoya.http.message.requests.HttpRequest
 import burp.api.montoya.scanner.CrawlConfiguration
-import burp.api.montoya.sitemap.SiteMapFilter
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
@@ -71,14 +65,6 @@ private fun normalizeHttpLineEndings(raw: String): String =
 // Splits a raw HTTP message into (headerSection, body) at the first blank line.
 // Tolerates CRLF (\r\n\r\n) and LF-only (\n\n) separators; if no blank line is
 // found, the whole message is treated as headers and the body is empty.
-private fun splitHttpHeadersAndBody(message: String): Pair<String, String> {
-    val crlf = message.indexOf("\r\n\r\n")
-    if (crlf >= 0) return message.substring(0, crlf) to message.substring(crlf + 4)
-    val lf = message.indexOf("\n\n")
-    if (lf >= 0) return message.substring(0, lf) to message.substring(lf + 2)
-    return message to ""
-}
-
 // Truncates a response string to maxChars, preserving the status line + headers
 // (which come first) and appending a note with the full length. A non-positive
 // maxChars disables truncation.
@@ -92,76 +78,6 @@ private fun truncateResponse(response: String, maxChars: Int): String {
 fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
     val disabledSet = config.getDisabledToolsList()
     fun enabled(name: String) = name !in disabledSet
-
-    if (enabled("send_http1_request")) mcpTool<SendHttp1Request>("Issues an HTTP/1.1 request and returns the response.") {
-        val allowed = runBlocking {
-            HttpRequestSecurity.checkHttpRequestPermission(targetHostname, targetPort, config, content, api)
-        }
-        if (!allowed) {
-            api.logging().logToOutput("MCP HTTP request denied: $targetHostname:$targetPort")
-            return@mcpTool "Send HTTP request denied by Burp Suite"
-        }
-
-        api.logging().logToOutput("MCP HTTP/1.1 request: $targetHostname:$targetPort")
-
-        val fixedContent = content.replace("\r", "").replace("\n", "\r\n")
-
-        val request = HttpRequest.httpRequest(toMontoyaService(), fixedContent)
-        val response = api.http().sendRequest(request)
-
-        response?.toString() ?: "<no response>"
-    }
-
-    if (enabled("send_http2_request")) mcpTool<SendHttp2Request>("Issues an HTTP/2 request and returns the response. Do NOT pass headers to the body parameter.") {
-        val http2RequestDisplay = buildString {
-            pseudoHeaders.forEach { (key, value) ->
-                val headerName = if (key.startsWith(":")) key else ":$key"
-                appendLine("$headerName: $value")
-            }
-            headers.forEach { (key, value) ->
-                appendLine("$key: $value")
-            }
-            if (requestBody.isNotBlank()) {
-                appendLine()
-                append(requestBody)
-            }
-        }
-
-        val allowed = runBlocking {
-            HttpRequestSecurity.checkHttpRequestPermission(targetHostname, targetPort, config, http2RequestDisplay, api)
-        }
-        if (!allowed) {
-            api.logging().logToOutput("MCP HTTP request denied: $targetHostname:$targetPort")
-            return@mcpTool "Send HTTP request denied by Burp Suite"
-        }
-
-        api.logging().logToOutput("MCP HTTP/2 request: $targetHostname:$targetPort")
-
-        val orderedPseudoHeaderNames = listOf(":scheme", ":method", ":path", ":authority")
-
-        val fixedPseudoHeaders = LinkedHashMap<String, String>().apply {
-            orderedPseudoHeaderNames.forEach { name ->
-                val value = pseudoHeaders[name.removePrefix(":")] ?: pseudoHeaders[name]
-                if (value != null) {
-                    put(name, value)
-                }
-            }
-
-            pseudoHeaders.forEach { (key, value) ->
-                val properKey = if (key.startsWith(":")) key else ":$key"
-                if (!containsKey(properKey)) {
-                    put(properKey, value)
-                }
-            }
-        }
-
-        val headerList = (fixedPseudoHeaders + headers).map { HttpHeader.httpHeader(it.key.lowercase(), it.value) }
-
-        val request = HttpRequest.http2Request(toMontoyaService(), headerList, requestBody)
-        val response = api.http().sendRequest(request, HttpMode.HTTP_2)
-
-        response?.toString() ?: "<no response>"
-    }
 
     if (enabled("create_repeater_tab")) mcpTool<CreateRepeaterTab>("Creates a new Repeater tab with the specified HTTP request and optional tab name. Line endings are normalized to HTTP CRLF automatically, so \\n in the content is accepted. The tab is targeted at the given targetHostname/targetPort/usesHttps.") {
         val request = HttpRequest.httpRequest(toMontoyaService(), normalizeHttpLineEndings(content))
@@ -191,46 +107,6 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
 
     if (enabled("generate_random_string")) mcpTool<GenerateRandomString>("Generates a random string of specified length and character set") {
         api.utilities().randomUtils().randomString(length, characterSet)
-    }
-
-    if (enabled("output_project_options")) mcpTool(
-        "output_project_options",
-        "Outputs current project-level configuration in JSON format. You can use this to determine the schema for available config options."
-    ) {
-        api.burpSuite().exportProjectOptionsAsJson()
-    }
-
-    if (enabled("output_user_options")) mcpTool(
-        "output_user_options",
-        "Outputs current user-level configuration in JSON format. You can use this to determine the schema for available config options."
-    ) {
-        api.burpSuite().exportUserOptionsAsJson()
-    }
-
-    val toolingDisabledMessage =
-        "User has disabled configuration editing. They can enable it in the MCP tab in Burp by selecting 'Enable tools that can edit your config'"
-
-    if (enabled("set_project_options")) mcpTool<SetProjectOptions>("Sets project-level configuration in JSON format. This will be merged with existing configuration. Make sure to export before doing this, so you know what the schema is. Make sure the JSON has a top level 'user_options' object!") {
-        if (config.configEditingTooling) {
-            api.logging().logToOutput("Setting project-level configuration: $json")
-            api.burpSuite().importProjectOptionsFromJson(json)
-
-            "Project configuration has been applied"
-        } else {
-            toolingDisabledMessage
-        }
-    }
-
-
-    if (enabled("set_user_options")) mcpTool<SetUserOptions>("Sets user-level configuration in JSON format. This will be merged with existing configuration. Make sure to export before doing this, so you know what the schema is. Make sure the JSON has a top level 'project_options' object!") {
-        if (config.configEditingTooling) {
-            api.logging().logToOutput("Setting user-level configuration: $json")
-            api.burpSuite().importUserOptionsFromJson(json)
-
-            "User configuration has been applied"
-        } else {
-            toolingDisabledMessage
-        }
     }
 
     if (api.burpSuite().version().edition() == BurpSuiteEdition.PROFESSIONAL) {
@@ -308,17 +184,6 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
         }
     }
 
-    if (enabled("get_proxy_http_history")) mcpPaginatedTool<GetProxyHttpHistory>("Displays items within the proxy HTTP history") {
-        val allowed = runBlocking {
-            checkHistoryPermissionOrDeny(HistoryAccessType.HTTP_HISTORY, config, api, "HTTP history")
-        }
-        if (!allowed) {
-            return@mcpPaginatedTool sequenceOf("HTTP history access denied by Burp Suite")
-        }
-
-        api.proxy().history().asSequence().map { truncateIfNeeded(Json.encodeToString(it.toSerializableForm())) }
-    }
-
     if (enabled("get_proxy_http_history_regex")) mcpPaginatedTool<GetProxyHttpHistoryRegex>("Displays items matching a specified regex within the proxy HTTP history") {
         val allowed = runBlocking {
             checkHistoryPermissionOrDeny(HistoryAccessType.HTTP_HISTORY, config, api, "HTTP history")
@@ -362,8 +227,15 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
     // -------------------------------------------------------------------------
 
     if (enabled("get_proxy_http_history_item")) mcpTool<GetProxyHttpHistoryItem>(
-        "Returns a single proxy HTTP history entry by its zero-based index. " +
-        "Use get_proxy_http_history to discover valid indices."
+        "Returns a single proxy HTTP history entry by its zero-based index, letting you choose the ORIGINAL " +
+        "or MODIFIED version of each message independently (four combinations in total). " +
+        "requestModified (default true): true = the final request Burp sent, after match/replace rules and manual " +
+        "Proxy edits; false = the request exactly as received from the client. " +
+        "responseModified (default true): true = the processed response; false = the original response received " +
+        "from the server. " +
+        "Note: the original request is only available for traffic proxied while this extension was running — for " +
+        "older history the modified request is returned instead and variantNote explains it. " +
+        "Use get_proxy_http_history_regex to discover valid indices."
     ) {
         val allowed = runBlocking {
             checkHistoryPermissionOrDeny(HistoryAccessType.HTTP_HISTORY, config, api, "HTTP history")
@@ -374,59 +246,40 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
         if (index < 0 || index >= history.size) {
             return@mcpTool "Index $index is out of range. History contains ${history.size} item(s)."
         }
-        truncateIfNeeded(Json.encodeToString(history[index].toSerializableForm()))
-    }
+        val item = history[index]
 
-    // -------------------------------------------------------------------------
-    // Scope
-    // -------------------------------------------------------------------------
+        var variantNote: String? = null
 
-    if (enabled("is_in_scope")) mcpTool<IsInScope>("Checks whether a URL is within the Burp Suite target scope.") {
-        val inScope = api.scope().isInScope(url)
-        if (inScope) "In scope: $url" else "NOT in scope: $url"
-    }
-
-    if (enabled("add_to_scope")) mcpTool<AddToScope>("Adds a URL to the Burp Suite target scope.") {
-        api.scope().includeInScope(url)
-        "Added to scope: $url"
-    }
-
-    if (enabled("remove_from_scope")) mcpTool<RemoveFromScope>("Removes a URL from the Burp Suite target scope.") {
-        api.scope().excludeFromScope(url)
-        "Removed from scope: $url"
-    }
-
-    // -------------------------------------------------------------------------
-    // Site map
-    // -------------------------------------------------------------------------
-
-    if (enabled("get_site_map")) mcpPaginatedTool<GetSiteMap>("Returns paginated entries from the Burp Suite target sitemap.") {
-        api.siteMap().requestResponses().asSequence()
-            .map { truncateIfNeeded(Json.encodeToString(it.toSerializableForm())) }
-    }
-
-    if (enabled("get_site_map_for_url")) mcpPaginatedTool<GetSiteMapForUrl>(
-        "Returns paginated sitemap entries whose URL starts with the given prefix. " +
-        "Useful for drilling into a specific host or path."
-    ) {
-        api.siteMap().requestResponses(SiteMapFilter.prefixFilter(url)).asSequence()
-            .map { truncateIfNeeded(Json.encodeToString(it.toSerializableForm())) }
-    }
-
-    if (enabled("set_task_execution_engine_state")) mcpTool<SetTaskExecutionEngineState>("Sets the state of Burp's task execution engine (paused or unpaused)") {
-        api.burpSuite().taskExecutionEngine().state = if (running) RUNNING else PAUSED
-
-        "Task execution engine is now ${if (running) "running" else "paused"}"
-    }
-
-    if (enabled("set_proxy_intercept_state")) mcpTool<SetProxyInterceptState>("Enables or disables Burp Proxy Intercept") {
-        if (intercepting) {
-            api.proxy().enableIntercept()
+        var requestVariant = if (requestModified) "modified" else "original"
+        val requestText = if (requestModified) {
+            item.finalRequest()?.toString() ?: "<no request>"
         } else {
-            api.proxy().disableIntercept()
+            val original = ProxyTrafficStore.originalRequest(item.id())
+            if (original != null) {
+                original
+            } else {
+                requestVariant = "modified"
+                variantNote = "Original request unavailable (traffic predates extension load or was not captured); " +
+                    "showing the modified request instead."
+                item.finalRequest()?.toString() ?: "<no request>"
+            }
         }
 
-        "Intercept has been ${if (intercepting) "enabled" else "disabled"}"
+        val responseText = if (responseModified) {
+            item.response()?.toString() ?: "<no response>"
+        } else {
+            item.originalResponse()?.toString() ?: "<no response>"
+        }
+
+        val output = net.portswigger.mcp.schema.HttpRequestResponse(
+            request = requestText,
+            response = responseText,
+            notes = item.annotations().notes(),
+            requestVariant = requestVariant,
+            responseVariant = if (responseModified) "modified" else "original",
+            variantNote = variantNote
+        )
+        truncateIfNeeded(Json.encodeToString(output))
     }
 
     // -------------------------------------------------------------------------
@@ -437,7 +290,7 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
         "Extracts all regex matches from an HTTP response string. " +
         "Use 'group' to select a specific capture group (0 = entire match, 1+ = numbered group). " +
         "Useful for pulling out CSRF tokens, auth values, redirect URLs, or any pattern from a response. " +
-        "The response can come from send_http1_request, send_http2_request, or any history tool."
+        "The response can come from send_repeater_tab_request or any proxy history tool."
     ) {
         val compiled = try {
             Pattern.compile(regex, Pattern.DOTALL)
@@ -456,59 +309,6 @@ fun Server.registerTools(api: MontoyaApi, config: McpConfig) {
         }
 
         if (results.isEmpty()) "No matches found" else results.joinToString("\n")
-    }
-
-    // -------------------------------------------------------------------------
-    // Proxy history search
-    // -------------------------------------------------------------------------
-
-    if (enabled("search_proxy_history")) mcpPaginatedTool<SearchProxyHistory>(
-        "Searches proxy HTTP history with optional filters combined with AND logic. " +
-        "statusCode: exact HTTP status code (200, 302, 401, …). " +
-        "method: HTTP verb, case-insensitive (GET, POST, PUT, …). " +
-        "contentType: substring match on the Content-Type response header (json, html, xml, …). " +
-        "bodyKeyword: case-insensitive substring search in the response body only. " +
-        "Omit any filter to match all values for that field."
-    ) {
-        val allowed = runBlocking {
-            checkHistoryPermissionOrDeny(HistoryAccessType.HTTP_HISTORY, config, api, "HTTP history search")
-        }
-        if (!allowed) return@mcpPaginatedTool sequenceOf("HTTP history access denied by Burp Suite")
-
-        api.proxy().history().asSequence().filter { item ->
-            val reqStr = item.request().toString()
-            val respStr = item.response()?.toString() ?: ""
-            val (headerSection, body) = splitHttpHeadersAndBody(respStr)
-
-            // Method: first whitespace-delimited token of the request line ("GET / HTTP/1.1" → "GET")
-            if (method != null) {
-                val parsedMethod = reqStr.trimStart().split(Regex("\\s+")).firstOrNull() ?: ""
-                if (!parsedMethod.equals(method, ignoreCase = true)) return@filter false
-            }
-
-            // Status code: second whitespace-delimited token of the status line ("HTTP/1.1 200 OK" → 200)
-            if (statusCode != null) {
-                val parsedStatus = respStr.lineSequence().firstOrNull()
-                    ?.trim()?.split(Regex("\\s+"))?.getOrNull(1)?.toIntOrNull()
-                if (parsedStatus != statusCode) return@filter false
-            }
-
-            // Content-Type: header section only (before the blank line)
-            if (contentType != null) {
-                val hasMatch = headerSection.lineSequence().any { line ->
-                    line.startsWith("Content-Type:", ignoreCase = true) &&
-                    line.contains(contentType, ignoreCase = true)
-                }
-                if (!hasMatch) return@filter false
-            }
-
-            // Body keyword: response body only (after the blank line)
-            if (bodyKeyword != null) {
-                if (!body.contains(bodyKeyword, ignoreCase = true)) return@filter false
-            }
-
-            true
-        }.map { truncateIfNeeded(Json.encodeToString(it.toSerializableForm())) }
     }
 
     // -------------------------------------------------------------------------
@@ -651,24 +451,6 @@ interface HttpServiceParams {
 }
 
 @Serializable
-data class SendHttp1Request(
-    val content: String,
-    override val targetHostname: String,
-    override val targetPort: Int,
-    override val usesHttps: Boolean
-) : HttpServiceParams
-
-@Serializable
-data class SendHttp2Request(
-    val pseudoHeaders: Map<String, String>,
-    val headers: Map<String, String>,
-    val requestBody: String,
-    override val targetHostname: String,
-    override val targetPort: Int,
-    override val usesHttps: Boolean
-) : HttpServiceParams
-
-@Serializable
 data class CreateRepeaterTab(
     val tabName: String?,
     val content: String,
@@ -702,25 +484,10 @@ data class Base64Decode(val content: String)
 data class GenerateRandomString(val length: Int, val characterSet: String)
 
 @Serializable
-data class SetProjectOptions(val json: String)
-
-@Serializable
-data class SetUserOptions(val json: String)
-
-@Serializable
-data class SetTaskExecutionEngineState(val running: Boolean)
-
-@Serializable
-data class SetProxyInterceptState(val intercepting: Boolean)
-
-@Serializable
 data class SetActiveEditorContents(val text: String)
 
 @Serializable
 data class GetScannerIssues(override val count: Int, override val offset: Int) : Paginated
-
-@Serializable
-data class GetProxyHttpHistory(override val count: Int, override val offset: Int) : Paginated
 
 @Serializable
 data class GetProxyHttpHistoryRegex(val regex: String, override val count: Int, override val offset: Int) : Paginated
@@ -751,26 +518,11 @@ data class StartActiveScan(
 ) : HttpServiceParams
 
 @Serializable
-data class GetProxyHttpHistoryItem(val index: Int)
-
-@Serializable
-data class IsInScope(val url: String)
-
-@Serializable
-data class AddToScope(val url: String)
-
-@Serializable
-data class RemoveFromScope(val url: String)
-
-@Serializable
-data class GetSiteMap(override val count: Int, override val offset: Int) : Paginated
-
-@Serializable
-data class GetSiteMapForUrl(
-    val url: String,
-    override val count: Int,
-    override val offset: Int
-) : Paginated
+data class GetProxyHttpHistoryItem(
+    val index: Int,
+    val requestModified: Boolean = true,
+    val responseModified: Boolean = true
+)
 
 @Serializable
 data class StartPassiveScan(
@@ -805,16 +557,6 @@ data class ExtractFromResponse(
     val regex: String,
     val group: Int = 0
 )
-
-@Serializable
-data class SearchProxyHistory(
-    val statusCode: Int? = null,
-    val method: String? = null,
-    val contentType: String? = null,
-    val bodyKeyword: String? = null,
-    override val count: Int,
-    override val offset: Int
-) : Paginated
 
 // ---------------------------------------------------------------------------
 // Repeater Swing utilities

@@ -1,6 +1,6 @@
 ---
 name: burp-mcp
-description: Use when interacting with Burp Suite through its MCP server (zalakamal08/burp-mcp-server) to perform web security testing — sending/replaying HTTP requests, working with Repeater tabs and their send-history, searching proxy history, managing scope, running scans, and extracting values from responses. Teaches the most token-efficient tool choices and the standard request→modify→resend testing loop.
+description: Use when interacting with Burp Suite through its MCP server (zalakamal08/burp-mcp-server) to perform web security testing — replaying and modifying HTTP requests via Repeater tabs, reviewing proxy history (including original vs modified requests/responses), running scans, and extracting values from responses. Teaches the most token-efficient tool choices and the standard request→modify→resend testing loop.
 ---
 
 # Burp Suite MCP — Efficient Usage Guide
@@ -10,6 +10,11 @@ This skill teaches an AI agent how to drive Burp Suite through the MCP server
 **efficiently** — choosing the right tool, minimizing token spend, and following
 proven web-pentest workflows.
 
+This is a lean build focused on the request → modify → resend loop. It exposes
+**22 tools** across Repeater, Proxy, Scanner (Pro), Intruder, Utilities, and Editor.
+There are intentionally **no** raw HTTP-send, scope, site-map, or config-editing
+tools — send requests through Repeater instead.
+
 All tools are prefixed `mcp__burp__` in Claude Code. Tool names below omit the prefix.
 
 ---
@@ -17,11 +22,10 @@ All tools are prefixed `mcp__burp__` in Claude Code. Tool names below omit the p
 ## Golden rules (read first)
 
 1. **Read, then send.** Use `get_repeater_tab` to read a tab's request + target in one call, then `send_repeater_tab_request` (optionally with a modified `request`) to send it.
-2. **Never dump full history when you can filter.** Use `search_proxy_history` (filter by status/method/content-type/body keyword) or `get_proxy_http_history_regex` instead of paging through `get_proxy_http_history`. This saves enormous token volume.
-3. **Always paginate.** History/site-map tools take `count` and `offset`. Start with a small `count` (e.g. 20) and page with `offset` only if needed.
+2. **Never dump full history when you can filter.** Use `get_proxy_http_history_regex` (or `get_proxy_websocket_history_regex`) instead of paging through unfiltered history. This saves enormous token volume.
+3. **Always paginate.** History tools take `count` and `offset`. Start with a small `count` (e.g. 20) and page with `offset` only if needed.
 4. **Extract, don't re-read.** When you only need a token/CSRF value/redirect URL from a large response, pass the response to `extract_from_response` with a regex rather than re-emitting the whole body.
 5. **Discover indices before using them.** Repeater tools are index-based. Call `list_repeater_tabs` first; never guess an index.
-6. **Respect scope.** Before scanning, confirm the target is in scope (`is_in_scope`) or add it (`add_to_scope`). Scans on out-of-scope hosts may be blocked or unwanted.
 
 ---
 
@@ -56,8 +60,7 @@ This is the workhorse pattern for manual exploitation and fuzzing:
 Notes:
 - The raw request is a full HTTP message: `METHOD path HTTP/1.1\r\nHost: ...\r\n\r\nbody`.
   The server normalizes line endings, so `\n` is accepted, but keep the blank line
-  between headers and body. This applies to `create_repeater_tab`,
-  `send_to_intruder`, and the HTTP send tools.
+  between headers and body. This applies to `create_repeater_tab` and `send_to_intruder` too.
 - **HTTPS and port are auto-detected** from the tab's target label, an HTTPS
   toggle (older Burp), or — when neither is present — the request's protocol line
   (`HTTP/2` ⇒ HTTPS, port upgraded to 443) and the `Host` header. Detection is
@@ -71,49 +74,46 @@ Notes:
   (e.g. a CDN error page) cannot overflow the token limit. The status line and
   headers come first (preserved). Pass a larger `maxResponseChars` for more body.
 - `create_repeater_tab` stages a brand-new request as a Repeater tab for the user
-  to inspect or send manually.
+  to inspect or send manually. You must supply `targetHostname`, `targetPort`, and
+  `usesHttps` explicitly for it and for `send_to_intruder` — these are NOT
+  auto-detected (unlike Repeater-tab sends).
 
 ---
 
 ## Choosing the right tool
 
-### Sending HTTP requests
+### Sending / staging requests
 
 | Goal | Tool |
 |---|---|
 | Replay/modify a request from a Repeater tab | `send_repeater_tab_request` (optional `request` to modify) |
-| Send a brand-new one-off HTTP/1.1 request | `send_http1_request` (specify host/port/usesHttps) |
-| Send an HTTP/2 request (pseudo-headers) | `send_http2_request` |
 | Open a fresh Repeater tab for the user to see | `create_repeater_tab` |
 | Hand a request to Intruder for the user | `send_to_intruder` |
 
-For `send_http1_request` / `send_http2_request` / `create_repeater_tab`, you must
-supply `targetHostname`, `targetPort`, and `usesHttps` explicitly — these are NOT
-auto-detected (unlike Repeater-tab sends).
+There is no raw one-off HTTP-send tool in this build — put the request in a Repeater
+tab (`create_repeater_tab`) and send it with `send_repeater_tab_request`.
 
 ### Reviewing traffic
 
 | Goal | Tool | Why |
 |---|---|---|
-| Find requests matching specific criteria | `search_proxy_history` (statusCode/method/contentType/bodyKeyword, AND logic) | Filters server-side — cheapest |
-| Find by URL/content pattern | `get_proxy_http_history_regex` | Regex filter |
-| Look at one known item | `get_proxy_http_history_item(index)` | Single item |
-| Browse recent traffic | `get_proxy_http_history(count, offset)` | Use small count |
+| Find by URL/content pattern | `get_proxy_http_history_regex(regex, count, offset)` | Regex filter — cheapest |
+| Look at one known item | `get_proxy_http_history_item(index, ...)` | Single item; see below |
 | WebSocket traffic | `get_proxy_websocket_history[_regex]` | |
 
-`search_proxy_history` filters (all optional, combined with AND):
-`statusCode` (exact int), `method` (case-insensitive), `contentType` (substring of
-Content-Type header), `bodyKeyword` (case-insensitive substring in body). It also
-paginates with `count`/`offset`.
+**Original vs modified traffic** — `get_proxy_http_history_item` takes two optional
+booleans, `requestModified` and `responseModified` (both default `true`), giving four
+combinations:
 
-### Scope & site map
+| Flag | `true` (default) | `false` |
+|---|---|---|
+| `requestModified` | final request Burp sent (after match/replace + manual edits) | request as received from the client (**original**) |
+| `responseModified` | processed response | original response from the server |
 
-| Goal | Tool |
-|---|---|
-| Is this URL in scope? | `is_in_scope(url)` |
-| Add / remove scope | `add_to_scope(url)` / `remove_from_scope(url)` |
-| Full site map (paginate!) | `get_site_map(count, offset)` |
-| Site map under a URL prefix | `get_site_map_for_url(url, count, offset)` |
+Use `requestModified=false` / `responseModified=false` to see what Burp's rules or
+manual edits changed. Caveat: the **original request** is captured live and is only
+available for traffic proxied while the extension was running — for older history the
+modified request is returned and a `variantNote` field says so.
 
 ### Scanning (Burp Suite **Pro** only)
 
@@ -140,15 +140,12 @@ back to manual testing via Repeater.
 capture group. Returns all matches, one per line. Use it for CSRF tokens, session
 IDs, redirect `Location` values, anti-CSRF nonces, etc.
 
-### Active editor & config
+### Active editor
 
 | Goal | Tool |
 |---|---|
 | Read what the user has open in an editor | `get_active_editor_contents` |
 | Write into the active editor | `set_active_editor_contents` |
-| Export/import Burp options (JSON) | `output_*_options` / `set_*_options` |
-| Pause/resume task engine | `set_task_execution_engine_state` |
-| Toggle proxy intercept | `set_proxy_intercept_state(intercepting)` |
 
 ---
 
@@ -167,23 +164,24 @@ get_repeater_tab(0)                                          # read the /user/1 
 send_repeater_tab_request(0, request: "<same request with /user/2>")   # returns the response
 ```
 
-**Find every 500 error returned to a POST that mentions "exception":**
+**Find requests to the login endpoint in proxy history:**
 ```
-search_proxy_history(statusCode: 500, method: "POST", bodyKeyword: "exception", count: 20, offset: 0)
+get_proxy_http_history_regex(regex: "POST /login", count: 20, offset: 0)
 ```
 
-**Find all JSON API responses in history:**
+**See what a match/replace rule changed on a proxied request:**
 ```
-search_proxy_history(contentType: "json", count: 30, offset: 0)
+get_proxy_http_history_item(index: 5, requestModified: false)   # original request from the client
+get_proxy_http_history_item(index: 5, requestModified: true)    # what Burp actually sent
 ```
 
 ---
 
 ## Efficiency checklist before each call
 
-- Am I about to pull full history? → switch to `search_proxy_history` / regex.
+- Am I about to pull full history? → switch to `get_proxy_http_history_regex`.
 - Am I reading a tab's request and response separately? → use `get_repeater_tab`.
 - Am I re-reading a big response to find one value? → use `extract_from_response`.
 - Did I guess an index? → list first.
 - Big result expected? → set a small `count`, page only if needed.
-- Scanning? → check scope first; confirm Pro edition.
+- Scanning? → confirm Pro edition.

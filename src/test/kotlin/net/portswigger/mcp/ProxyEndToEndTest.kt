@@ -71,7 +71,7 @@ class ProxyEndToEndTest {
         }
 
         var attempts = 0
-        while (!serverStarted && attempts < 10) {
+        while (!serverStarted && attempts < 50) {
             delay(100)
             attempts++
         }

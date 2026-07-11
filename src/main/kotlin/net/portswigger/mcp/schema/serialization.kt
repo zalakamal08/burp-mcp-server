@@ -105,7 +105,12 @@ enum class AuditIssueConfidence {
 data class HttpRequestResponse(
     val request: String?,
     val response: String?,
-    val notes: String?
+    val notes: String?,
+    // Populated only by get_proxy_http_history_item to report which variant of each message was
+    // returned ("original" vs "modified"); null (and omitted from JSON) for all other tools.
+    val requestVariant: String? = null,
+    val responseVariant: String? = null,
+    val variantNote: String? = null
 )
 
 @Serializable

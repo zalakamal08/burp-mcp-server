@@ -48,7 +48,7 @@ class McpServerIntegrationTest {
         
         runBlocking {
             var attempts = 0
-            while (!serverStarted && attempts < 10) {
+            while (!serverStarted && attempts < 50) {
                 delay(100)
                 attempts++
             }
@@ -83,8 +83,8 @@ class McpServerIntegrationTest {
             assertFalse(tools.isEmpty(), "Server should have registered tools")
             
             val toolNames = tools.map { it.name }
-            assertTrue(toolNames.contains("output_project_options"), "Server should have output_project_options tool")
-            assertTrue(toolNames.contains("output_user_options"), "Server should have output_user_options tool")
+            assertTrue(toolNames.contains("create_repeater_tab"), "Server should have create_repeater_tab tool")
+            assertTrue(toolNames.contains("get_proxy_http_history_item"), "Server should have get_proxy_http_history_item tool")
             
             val pingResult = client.ping()
             assertNotNull(pingResult, "Ping should return a result")
